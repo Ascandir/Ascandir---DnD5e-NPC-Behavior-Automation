@@ -77,7 +77,9 @@ export const DEFAULT_PHRASES = {
     "Würdet Ihr bitte zur Seite treten?",
     "*räuspert sich*",
     "Aus dem Weg, bitte.",
-    "Ich müsste da mal vorbei."
+    "Ich müsste da mal vorbei.",
+    "Nach Euch.",
+    "Bitte, geht nur vor."
   ]
 };
 

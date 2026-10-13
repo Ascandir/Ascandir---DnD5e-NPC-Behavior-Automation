@@ -137,6 +137,17 @@ function drawLine(doc, cfg, pool) {
 
 const brains = new Map();
 const BLOCKED = "blocked";
+const DOOR_BLOCKED = "door-blocked";
+
+/** Versperren Wände oder geschlossene Türen die Sicht von a nach b? */
+function sightBlocked(a, b) {
+  try {
+    const backend = CONFIG.Canvas.polygonBackends?.sight;
+    return !!backend?.testCollision(a, b, { type: "sight", mode: "any" });
+  } catch (err) {
+    return false;
+  }
+}
 let routeVersion = 0;
 
 class Brain {
@@ -259,12 +270,17 @@ class Brain {
     return keys;
   }
 
-  /** Felder, auf denen gerade (sichtbare) andere Token stehen */
+  /**
+   * Felder, auf denen andere Token stehen – aber nur die, die der NSC sehen kann.
+   * Wer hinter einer geschlossenen Tür steht, ist ihm unbekannt.
+   */
   tokenCells() {
     const L = this.pf.lattice();
     const keys = new Set();
+    const eye = this.center();
     for (const t of canvas.tokens.placeables) {
       if (t.document === this.doc || t.document.hidden) continue;
+      if (sightBlocked(eye, t.center)) continue;
       const r = { x: t.x + 2, y: t.y + 2, width: Math.max(1, t.w - 4), height: Math.max(1, t.h - 4) };
       for (const o of offsetsInRect(L, r)) keys.add(L.key(o));
     }
@@ -387,21 +403,24 @@ class Brain {
   async goTo(target, gen) {
     this.target = target;
     const before = this.status;
+    let approached = false;
     try {
-      for (let attempt = 0; attempt < 6; attempt++) {
+      for (let attempt = 0; attempt < 12; attempt++) {
         if (!this.ok(gen)) return false;
         const legs = await this.planTo(target, gen);
         if (!this.ok(gen)) return false;
         let result;
         if (!legs) {
-          // Kein Weg. Gäbe es einen, wenn niemand im Weg stünde? Dann warten.
+          // Kein Weg um die (sichtbaren) Token herum.
           if (!this.cfg.avoidTokens) return false;
-          const free = await this.planTo(target, gen, { ignoreTokens: true });
-          if (!free) return false;
-          // Den Weg gehen, als wäre er frei – walk() bleibt vor dem Hindernis stehen
-          result = free.length ? await this.walk(free, gen) : BLOCKED;
-          if (result === true) return true;
-          if (result !== BLOCKED) return false;
+          if (approached) {
+            result = BLOCKED; // steht schon am Hindernis: an Ort und Stelle warten
+          } else {
+            const free = await this.planTo(target, gen, { ignoreTokens: true });
+            if (!free) return false;
+            // So weit gehen wie möglich – walk() bleibt vor dem Hindernis stehen
+            result = free.length ? await this.walk(free, gen) : BLOCKED;
+          }
         } else {
           if (!legs.length) return true;
           this.status = before;
@@ -409,19 +428,52 @@ class Brain {
           if (attempt === 0 && this.cfg.role === "server" && Math.random() < 0.25) this.say("walk", { chanceFactor: 0.6 });
           result = await this.walk(legs, gen);
         }
-        if (result !== BLOCKED) return result;
-        // Jemand steht im Weg: stehen bleiben, höflich bitten, kurz warten, neu planen
+        if (result === true) return true;
+        if (result !== BLOCKED && result !== DOOR_BLOCKED) return false;
+        // Jemand steht im Weg: stehen bleiben, höflich sein, kurz warten, dann neu planen
+        // (neue Route, falls es eine gibt – sonst weiter warten)
         clearDebug(this.id);
+        const firstTime = !approached;
+        approached = true;
         this.status = "wartet, bis der Weg frei ist";
-        if (attempt === 0 || Math.random() < 0.35) this.say("blocked", { chanceFactor: 1.4 });
+        if (firstTime || Math.random() < 0.3) this.say("blocked", { chanceFactor: 1.4 });
         if (!(await this.sleep(1500 + Math.random() * 1000, gen))) return false;
       }
       this.status = "gibt auf – Weg bleibt versperrt";
       return false;
     } finally {
+      this.releaseHeldDoors();
       this.target = null;
       clearDebug(this.id);
     }
+  }
+
+  /** Offen gehaltene Türen freigeben (werden später geschlossen, sobald der Durchgang frei ist) */
+  releaseHeldDoors() {
+    const held = [...this.pf.heldDoors];
+    this.pf.heldDoors.clear();
+    if (this.cfg.closeDoors) held.forEach((w) => closeDoorLater(w, this.doc));
+  }
+
+  /** Einen Schritt von der Tür weg treten, damit andere durchkommen */
+  async stepBack(wall, gen) {
+    const L = this.pf.lattice();
+    const here = this.center();
+    const [x0, y0, x1, y1] = wall.c;
+    const mid = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+    const occupied = this.tokenCells();
+    this.refreshObstacles();
+    let best = null;
+    for (const n of L.neighbors(L.offsetOf(here))) {
+      if (!L.inBounds(n) || occupied.has(L.key(n))) continue;
+      const c = L.center(n);
+      if (this.pf.inObstacle(c)) continue;
+      const e = this.pf.testSegment(here, c);
+      if (!e || e.doors.length) continue;
+      const d = dist(c, mid);
+      if (d > dist(here, mid) + 1 && (!best || d > best.d)) best = { c, d };
+    }
+    if (best) await this.moveAlong([best.c], gen);
   }
 
   async walk(legs, gen) {
@@ -444,24 +496,24 @@ class Brain {
         // Vor der Tür stehen bleiben …
         const f = await flush();
         if (f !== true) return f;
-        // Steht jemand im Türrahmen oder direkt dahinter? Dann vor der Tür warten.
-        if (this.pathBlocked(leg.points.slice(1))) return BLOCKED;
         const before = this.status;
         this.status = "öffnet eine Tür";
         if (!(await this.sleep(500, gen))) return false;
         // … öffnen …
-        const opened = await openDoors(leg.doors);
-        if (!(await this.sleep(400, gen))) {
-          if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
-          return false;
-        }
-        // … hindurchgehen (falls inzwischen jemand im Rahmen steht: warten) …
+        const newly = await openDoors(leg.doors);
+        const opened = [...new Set([...newly, ...leg.doors.filter((w) => this.pf.heldDoors.has(w))])];
+        opened.forEach((w) => this.pf.heldDoors.add(w));
+        if (!(await this.sleep(400, gen))) return false;
+        // … erst jetzt sieht er, ob jemand im Türrahmen steht: dann einen Schritt zurück, Platz machen
         if (this.pathBlocked(leg.points.slice(1))) {
-          if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
+          this.status = "macht an der Tür Platz";
+          await this.stepBack(leg.doors[0], gen);
           this.status = before;
-          return BLOCKED;
+          return DOOR_BLOCKED;
         }
+        // … hindurchgehen …
         const ok = await this.moveAlong(leg.points.slice(1), gen);
+        opened.forEach((w) => this.pf.heldDoors.delete(w));
         if (!ok) {
           if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
           return false;
@@ -789,7 +841,7 @@ function closeDoorLater(wall, selfDoc) {
   const mid = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
   (async () => {
     await delay(800);
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 240; i++) {
       if (!wall.parent?.walls?.get(wall.id) || wall.ds !== OPEN) return;
       const range = (canvas.grid?.size ?? 100) * 0.9;
       const someoneThere = canvas.tokens?.placeables.some((t) => t.document !== selfDoc && dist(t.center, mid) < range)

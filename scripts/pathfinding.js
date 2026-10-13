@@ -276,6 +276,7 @@ export class TokenPathfinder {
     this.version = -1;
     this.obstacles = [];   // Regionen, die nie betreten werden (z. B. Tischflächen)
     this.tokenCells = new Set(); // Felder, auf denen andere Token stehen (wird umgangen)
+    this.heldDoors = new Set();  // Türen, die der NSC offen hält, während er Platz macht
   }
 
   /** Liegt der Punkt in einem Hindernis (z. B. auf einem Tisch)? */
@@ -323,10 +324,22 @@ export class TokenPathfinder {
       this.version = TokenPathfinder.wallVersion;
     }
     const k = `${Math.round(a.x)},${Math.round(a.y)}>${Math.round(b.x)},${Math.round(b.y)}`;
-    if (this.cache.has(k)) return this.cache.get(k);
-    const r = this._testSegment(a, b);
-    if (this.cache.size > 60000) this.cache.clear();
-    this.cache.set(k, r);
+    let r;
+    if (this.cache.has(k)) r = this.cache.get(k);
+    else {
+      r = this._testSegment(a, b);
+      if (this.cache.size > 60000) this.cache.clear();
+      this.cache.set(k, r);
+    }
+    // Offen gehaltene Türen zählen weiter als Tür, damit der NSC sie danach wieder schließt
+    if (r && this.heldDoors.size) {
+      const extra = [];
+      for (const w of this.heldDoors) {
+        const [x0, y0, x1, y1] = w.c;
+        if (!r.doors.includes(w) && segmentsCross(a, b, { x: x0, y: y0 }, { x: x1, y: y1 })) extra.push(w);
+      }
+      if (extra.length) r = { doors: [...r.doors, ...extra] };
+    }
     return r;
   }
 
