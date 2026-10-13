@@ -83,7 +83,7 @@ Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel finde
 - **Token-HUD (Rechtsklick auf den Token):** 🚶 öffnet die Einstellungen. Darunter ⏸ **pausiert** den NSC sofort – auch mitten im Laufen. ▶ setzt ihn fort, und er macht genau dort weiter, wo er war (z. B. beim selben Patrouillenpunkt).
 - **Token-Leiste links:** Knopf „NSC-Belebung an/aus“ (Hauptschalter für alle) und „Übersicht“.
 - **Übersicht:** alle NSCs der Szene mit aktuellem Status („geht zu Tisch 2“, „pausiert (SL)“ …). Pro NSC: ⏸/▶ pausieren/fortsetzen, ⏻ Verhalten ein/aus, ⚙ einstellen.
-- **Tot oder bewusstlos:** Hat der Token den Status *Tot* oder *Bewusstlos* oder 0 TP, bleibt er sofort stehen. Wird er geheilt bzw. der Status entfernt, macht er weiter.
+- **Tot oder bewusstlos:** Hat der Token den Status *Tot* oder *Bewusstlos* oder 0 TP, wird er sofort **pausiert**. Solange er tot ist, ist der Fortsetzen-Knopf ausgegraut. Wird er geheilt oder wiederbelebt, **bleibt er pausiert**, bis du ihn selbst mit ▶ fortsetzt.
 - Schiebst du einen NSC selbst, macht er 15 Sekunden Pause und läuft dann von dort weiter.
 - Bei **Spielpause** und während eines **Kampfes** bleiben alle stehen (beides abschaltbar).
 

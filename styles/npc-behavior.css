@@ -181,3 +181,10 @@
 .ascandir-npcb-overview .npcb-buttons button.npcb-on {
   color: #5cb85c;
 }
+
+#token-hud .npcb-hud-pause.npcb-disabled,
+.ascandir-npcb-overview .npcb-buttons button:disabled {
+  opacity: 0.35;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}

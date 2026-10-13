@@ -2,7 +2,7 @@
   "id": "ascandir-npc-behavior",
   "title": "Ascandir - DnD5e NPC Behavior Automation",
   "description": "Belebt Szenen: NSCs bedienen besetzte Tische, patrouillieren gezeichnete Wege oder schlendern umher. Sie finden ihren Weg selbst (inkl. Türen) und sagen abwechslungsreiche Sätze in Sprechblasen.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "authors": [
     {
       "name": "Ascandir"

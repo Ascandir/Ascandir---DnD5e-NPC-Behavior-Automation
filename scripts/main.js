@@ -96,6 +96,11 @@ function isDown(doc) {
 const isPaused = (doc) => !!doc?.getFlag?.(MID, "paused");
 
 async function setPaused(doc, paused) {
+  // Tote/bewusstlose NSCs lassen sich nicht fortsetzen – erst heilen
+  if (!paused && isDown(doc)) {
+    ui.notifications?.warn(`${doc.name} ist tot oder bewusstlos – erst heilen, dann fortsetzen.`);
+    return;
+  }
   await doc.update({ [`flags.${MID}.paused`]: !!paused });
 }
 
@@ -198,8 +203,8 @@ class Brain {
 
   /** Pausiert (SL) oder tot/bewusstlos? Dann steht der NSC still. */
   halted() {
+    if (isDown(this.doc)) return "pausiert – tot oder bewusstlos";
     if (isPaused(this.doc)) return "pausiert (SL)";
-    if (isDown(this.doc)) return "gestoppt – tot oder bewusstlos";
     return null;
   }
 
@@ -222,6 +227,11 @@ class Brain {
     // Wächter: Wird der NSC pausiert oder stirbt er, bleibt er sofort stehen – auch mitten im Laufen
     this._watch = setInterval(() => {
       if (!this.alive) return clearInterval(this._watch);
+      // Tot/bewusstlos: dauerhaft pausieren – nach dem Heilen setzt der SL selbst fort
+      if (isDown(this.doc) && !isPaused(this.doc) && !this._pausing) {
+        this._pausing = true;
+        this.doc.update({ [`flags.${MID}.paused`]: true }).finally(() => { this._pausing = false; });
+      }
       const h = this.halted();
       if (h && !this._wasHalted) {
         this.interrupt();
@@ -1220,10 +1230,11 @@ class BehaviorOverview extends ApplicationV2 {
     const rows = docs.map((d) => {
       const c = getConfig(d);
       const b = brains.get(d.id);
-      const paused = isPaused(d);
+      const down = isDown(d);
+      const paused = isPaused(d) || down;
       const status = !c.enabled ? "aus"
+        : down ? "pausiert – tot oder bewusstlos"
         : paused ? "pausiert (SL)"
-        : isDown(d) ? "gestoppt – tot oder bewusstlos"
         : !isLeader() ? "läuft beim aktiven SL" : b?.status ?? "startet …";
       return `
         <tr>
@@ -1231,7 +1242,7 @@ class BehaviorOverview extends ApplicationV2 {
           <td><a data-action="pan" data-id="${d.id}">${esc(d.name)}</a><br><small>${esc(ROLES[c.role]?.split(" (")[0] ?? c.role)}</small></td>
           <td class="npcb-status">${esc(status)}</td>
           <td class="npcb-buttons">
-            ${c.enabled ? `<button type="button" data-action="pause" data-id="${d.id}" title="${paused ? "Fortsetzen" : "Pausieren"}"><i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i></button>` : ""}
+            ${c.enabled ? `<button type="button" data-action="pause" data-id="${d.id}" ${down ? "disabled" : ""} title="${down ? "Tot oder bewusstlos – erst heilen" : paused ? "Fortsetzen" : "Pausieren"}"><i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i></button>` : ""}
             <button type="button" data-action="toggle" data-id="${d.id}" title="${c.enabled ? "Verhalten ausschalten" : "Verhalten einschalten"}" class="${c.enabled ? "npcb-on" : ""}"><i class="fa-solid fa-power-off"></i></button>
             <button type="button" data-action="edit" data-id="${d.id}" title="Einstellen"><i class="fa-solid fa-gear"></i></button>
           </td>
@@ -1419,15 +1430,19 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   col.append(btn);
   // Pause-Knopf, solange ein Verhalten aktiv ist
   if (getConfig(doc).enabled) {
-    const paused = isPaused(doc);
+    const down = isDown(doc);
+    const paused = isPaused(doc) || down;
     const pbtn = document.createElement("button");
     pbtn.type = "button";
-    pbtn.className = "control-icon npcb-hud-pause" + (paused ? " active" : "");
-    pbtn.title = paused ? "NSC-Verhalten fortsetzen" : "NSC-Verhalten pausieren";
+    pbtn.className = "control-icon npcb-hud-pause" + (paused ? " active" : "") + (down ? " npcb-disabled" : "");
+    pbtn.title = down ? "Tot oder bewusstlos – erst heilen, dann fortsetzen"
+      : paused ? "NSC-Verhalten fortsetzen" : "NSC-Verhalten pausieren";
     pbtn.innerHTML = `<i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i>`;
+    if (down) pbtn.disabled = true;
     pbtn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (isDown(doc)) return;
       await setPaused(doc, !isPaused(doc));
       hud.render?.();
     });
