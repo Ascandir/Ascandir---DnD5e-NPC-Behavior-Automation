@@ -1,0 +1,174 @@
+/* Ascandir - DnD5e NPC Behavior Automation */
+
+.ascandir-npcb .window-content {
+  overflow-y: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.ascandir-npcb fieldset {
+  border: 1px solid var(--color-border-light-tertiary, #7a7971);
+  border-radius: 6px;
+  margin: 0 0 0.6rem;
+  padding: 0.4rem 0.6rem 0.6rem;
+}
+
+.ascandir-npcb fieldset[hidden],
+.ascandir-npcb [hidden] {
+  display: none !important;
+}
+
+.ascandir-npcb legend {
+  font-weight: bold;
+  padding: 0 0.3rem;
+}
+
+.ascandir-npcb .form-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.ascandir-npcb .form-group > label {
+  flex: 1 1 45%;
+}
+
+.ascandir-npcb .form-group > select,
+.ascandir-npcb .form-group > input[type="number"],
+.ascandir-npcb .form-group > input[type="text"] {
+  flex: 1 1 55%;
+}
+
+.ascandir-npcb .form-group.stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.ascandir-npcb .form-group.stacked textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.ascandir-npcb .npcb-range {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 1 1 55%;
+}
+
+.ascandir-npcb .npcb-range input {
+  width: 4.5em;
+}
+
+.ascandir-npcb .npcb-checklist,
+.ascandir-npcb .npcb-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+  margin: 0.2rem 0 0.4rem;
+}
+
+.ascandir-npcb .npcb-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 10rem;
+}
+
+.ascandir-npcb .npcb-hint {
+  flex-basis: 100%;
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin: 0.2rem 0;
+}
+
+.ascandir-npcb .npcb-hint.warn {
+  color: #c45a00;
+  opacity: 1;
+}
+
+.ascandir-npcb .npcb-saynow input {
+  flex: 1;
+}
+
+.ascandir-npcb .npcb-saynow button {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.ascandir-npcb .npcb-footer {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding-top: 0.3rem;
+}
+
+.ascandir-npcb .npcb-footer button {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 0.8rem;
+}
+
+.ascandir-npcb .npcb-primary {
+  font-weight: bold;
+}
+
+/* Übersicht */
+.ascandir-npcb-overview .npcb-master {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.ascandir-npcb-overview .npcb-master button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.ascandir-npcb-overview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ascandir-npcb-overview td {
+  padding: 0.25rem;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-light-tertiary, #7a797155);
+}
+
+.ascandir-npcb-overview td img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border: none;
+}
+
+.ascandir-npcb-overview td a {
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.ascandir-npcb-overview .npcb-status {
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+.ascandir-npcb-overview .npcb-buttons {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ascandir-npcb-overview .npcb-buttons button {
+  width: 2rem;
+  display: inline-flex;
+  justify-content: center;
+}
+
+/* Token-HUD-Knopf */
+#token-hud .npcb-hud.active {
+  color: #ffb000;
+  border-color: #ffb000;
+}
