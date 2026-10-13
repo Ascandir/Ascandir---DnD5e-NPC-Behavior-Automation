@@ -172,3 +172,12 @@
   color: #ffb000;
   border-color: #ffb000;
 }
+
+#token-hud .npcb-hud-pause.active {
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+.ascandir-npcb-overview .npcb-buttons button.npcb-on {
+  color: #5cb85c;
+}

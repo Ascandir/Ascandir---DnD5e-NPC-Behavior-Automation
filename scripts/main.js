@@ -80,6 +80,25 @@ function isBusyNpc(doc) {
   return !!cfg?.enabled && ["server", "patrol", "wander"].includes(cfg.role ?? "server");
 }
 
+/** Ist der Token tot oder bewusstlos (dnd5e: Status oder 0 TP)? */
+function isDown(doc) {
+  const actor = doc?.actor;
+  if (!actor) return false;
+  const st = actor.statuses;
+  const dead = globalThis.CONFIG?.specialStatusEffects?.DEFEATED ?? "dead";
+  if (st?.has?.(dead) || st?.has?.("dead") || st?.has?.("unconscious")) return true;
+  const hp = actor.system?.attributes?.hp;
+  if (hp && Number(hp.max) > 0 && Number(hp.value) <= 0) return true;
+  return false;
+}
+
+/** Hat der SL diesen NSC pausiert? */
+const isPaused = (doc) => !!doc?.getFlag?.(MID, "paused");
+
+async function setPaused(doc, paused) {
+  await doc.update({ [`flags.${MID}.paused`]: !!paused });
+}
+
 function combatRunning() {
   return game.combats?.some((c) => c.started && (!c.scene || c.scene.id === canvas.scene?.id)) ?? false;
 }
@@ -172,8 +191,16 @@ class Brain {
   stop() {
     this.alive = false;
     this.gen++;
+    clearInterval(this._watch);
     this._stopMovement();
     clearDebug(this.id);
+  }
+
+  /** Pausiert (SL) oder tot/bewusstlos? Dann steht der NSC still. */
+  halted() {
+    if (isPaused(this.doc)) return "pausiert (SL)";
+    if (isDown(this.doc)) return "gestoppt – tot oder bewusstlos";
+    return null;
   }
 
   interrupt(holdMs = 0) {
@@ -192,7 +219,23 @@ class Brain {
   }
 
   async run() {
+    // Wächter: Wird der NSC pausiert oder stirbt er, bleibt er sofort stehen – auch mitten im Laufen
+    this._watch = setInterval(() => {
+      if (!this.alive) return clearInterval(this._watch);
+      const h = this.halted();
+      if (h && !this._wasHalted) {
+        this.interrupt();
+        this.releaseHeldDoors?.();
+      }
+      this._wasHalted = !!h;
+    }, 300);
     while (this.alive) {
+      const h = this.halted();
+      if (h) {
+        this.status = h;
+        await delay(500);
+        continue;
+      }
       if (blocked() || Date.now() < this.holdUntil || !this.doc.object) {
         if (blocked()) this.status = game.paused ? "pausiert (Spielpause)" : combatRunning() ? "pausiert (Kampf)" : "ausgeschaltet";
         await delay(500);
@@ -1165,6 +1208,7 @@ class BehaviorOverview extends ApplicationV2 {
     actions: {
       edit: BehaviorOverview._onEdit,
       toggle: BehaviorOverview._onToggle,
+      pause: BehaviorOverview._onPause,
       pan: BehaviorOverview._onPan,
       master: BehaviorOverview._onMaster
     }
@@ -1176,14 +1220,19 @@ class BehaviorOverview extends ApplicationV2 {
     const rows = docs.map((d) => {
       const c = getConfig(d);
       const b = brains.get(d.id);
-      const status = !c.enabled ? "aus" : !isLeader() ? "läuft beim aktiven SL" : b?.status ?? "startet …";
+      const paused = isPaused(d);
+      const status = !c.enabled ? "aus"
+        : paused ? "pausiert (SL)"
+        : isDown(d) ? "gestoppt – tot oder bewusstlos"
+        : !isLeader() ? "läuft beim aktiven SL" : b?.status ?? "startet …";
       return `
         <tr>
           <td><img src="${esc(d.texture?.src)}" alt=""></td>
           <td><a data-action="pan" data-id="${d.id}">${esc(d.name)}</a><br><small>${esc(ROLES[c.role]?.split(" (")[0] ?? c.role)}</small></td>
           <td class="npcb-status">${esc(status)}</td>
           <td class="npcb-buttons">
-            <button type="button" data-action="toggle" data-id="${d.id}" title="${c.enabled ? "Anhalten" : "Starten"}"><i class="fa-solid ${c.enabled ? "fa-pause" : "fa-play"}"></i></button>
+            ${c.enabled ? `<button type="button" data-action="pause" data-id="${d.id}" title="${paused ? "Fortsetzen" : "Pausieren"}"><i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i></button>` : ""}
+            <button type="button" data-action="toggle" data-id="${d.id}" title="${c.enabled ? "Verhalten ausschalten" : "Verhalten einschalten"}" class="${c.enabled ? "npcb-on" : ""}"><i class="fa-solid fa-power-off"></i></button>
             <button type="button" data-action="edit" data-id="${d.id}" title="Einstellen"><i class="fa-solid fa-gear"></i></button>
           </td>
         </tr>`;
@@ -1222,6 +1271,13 @@ class BehaviorOverview extends ApplicationV2 {
     const cfg = getConfig(doc);
     cfg.enabled = !cfg.enabled;
     await saveConfig(doc, cfg);
+    this.render();
+  }
+
+  static async _onPause(event, target) {
+    const doc = canvas.scene?.tokens.get(target.dataset.id);
+    if (!doc) return;
+    await setPaused(doc, !isPaused(doc));
     this.render();
   }
 
@@ -1297,6 +1353,8 @@ Hooks.once("ready", () => {
   });
   game.modules.get(MID).api = {
     openConfig, openOverview,
+    pause: (tokenId) => { const d = canvas.scene?.tokens.get(tokenId); return d && setPaused(d, true); },
+    resume: (tokenId) => { const d = canvas.scene?.tokens.get(tokenId); return d && setPaused(d, false); },
     say: (tokenId, text) => {
       const doc = canvas.scene?.tokens.get(tokenId);
       if (doc) broadcastBubble(doc, text);
@@ -1359,6 +1417,22 @@ Hooks.on("renderTokenHUD", (hud, html) => {
     openConfig(doc);
   });
   col.append(btn);
+  // Pause-Knopf, solange ein Verhalten aktiv ist
+  if (getConfig(doc).enabled) {
+    const paused = isPaused(doc);
+    const pbtn = document.createElement("button");
+    pbtn.type = "button";
+    pbtn.className = "control-icon npcb-hud-pause" + (paused ? " active" : "");
+    pbtn.title = paused ? "NSC-Verhalten fortsetzen" : "NSC-Verhalten pausieren";
+    pbtn.innerHTML = `<i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i>`;
+    pbtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await setPaused(doc, !isPaused(doc));
+      hud.render?.();
+    });
+    col.append(pbtn);
+  }
 });
 
 /* Knöpfe in der Token-Werkzeugleiste links */
