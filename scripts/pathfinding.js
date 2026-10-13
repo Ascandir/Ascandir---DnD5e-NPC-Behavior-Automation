@@ -273,6 +273,7 @@ export class TokenPathfinder {
     this.cache = new Map();
     this.version = -1;
     this.obstacles = [];   // Regionen, die nie betreten werden (z. B. Tischflächen)
+    this.tokenCells = new Set(); // Felder, auf denen andere Token stehen (wird umgangen)
   }
 
   /** Liegt der Punkt in einem Hindernis (z. B. auf einem Tisch)? */
@@ -287,11 +288,18 @@ export class TokenPathfinder {
 
   /** Streift die Strecke ein Hindernis? (Stichproben alle Viertelfeld) */
   segmentHitsObstacle(a, b) {
-    if (!this.obstacles.length) return false;
-    const steps = Math.max(1, Math.ceil(dist(a, b) / (this.lattice().size / 4)));
+    if (!this.obstacles.length && !this.tokenCells.size) return false;
+    const L = this.lattice();
+    const own = new Set([L.key(L.offsetOf(a)), L.key(L.offsetOf(b))]);
+    const steps = Math.max(1, Math.ceil(dist(a, b) / (L.size / 4)));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      if (this.inObstacle({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })) return true;
+      const p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      if (this.inObstacle(p)) return true;
+      if (this.tokenCells.size) {
+        const k = L.key(L.offsetOf(p));
+        if (!own.has(k) && this.tokenCells.has(k)) return true;
+      }
     }
     return false;
   }
@@ -388,6 +396,7 @@ export class TokenPathfinder {
     const cellBlocked = (o) => {
       const k = L.key(o);
       if (k === startKey) return false; // Wer schon auf einem Tisch steht, darf herunter
+      if (this.tokenCells.has(k)) return true; // Dort steht ein anderer Token
       if (!blockedCell.has(k)) blockedCell.set(k, this.inObstacle(L.center(o)));
       return blockedCell.get(k);
     };

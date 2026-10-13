@@ -52,6 +52,8 @@ Ein Sitzbereich ist **besetzt**, sobald ein sichtbarer Token darin steht. NSCs, 
 - **Türen hinter sich schließen ✔ (Standard):** Er bleibt vor der Tür stehen, öffnet sie, tritt hindurch, schließt sie hinter sich und läuft weiter. Steht gerade jemand anderes im Durchgang, wartet die Tür, bis der Weg frei ist.
 - **ohne Haken:** Er öffnet die Tür, geht hindurch und lässt sie offen.
 
+**Anderen Token ausweichen** (Haken pro NSC, Standard an): Der NSC geht um andere Token herum. Steht jemand im Weg oder im Türrahmen, bleibt er davor stehen, bittet um Platz („Darf ich mal durch?“) und geht weiter, sobald frei ist. Bleibt der Weg zu lange versperrt, lässt er das Ziel aus. **Haken aus** für fliegende oder geisterhafte Wesen: Sie ziehen einfach über bzw. durch andere Token hinweg.
+
 **Gezeichnete Wege (optional):** Du kannst Wege selbst vorgeben:
 
 1. Werkzeug **Zeichnungen** → **Polygon** (oder Freihand) und den Weg Punkt für Punkt durch die Szene klicken.

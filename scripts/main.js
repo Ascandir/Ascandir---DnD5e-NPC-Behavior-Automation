@@ -46,6 +46,7 @@ const DEFAULT_CONFIG = {
   speed: 3,
   autoRotate: false,
   closeDoors: true,
+  avoidTokens: true,
   pathing: "auto",
   routes: [],
   obstacles: [],
@@ -134,6 +135,7 @@ function drawLine(doc, cfg, pool) {
 /* ------------------------------------------------------------------ */
 
 const brains = new Map();
+const BLOCKED = "blocked";
 let routeVersion = 0;
 
 class Brain {
@@ -255,6 +257,54 @@ class Brain {
     return keys;
   }
 
+  /** Felder, auf denen gerade (sichtbare) andere Token stehen */
+  tokenCells() {
+    const L = this.pf.lattice();
+    const keys = new Set();
+    for (const t of canvas.tokens.placeables) {
+      if (t.document === this.doc || t.document.hidden) continue;
+      const r = { x: t.x + 2, y: t.y + 2, width: Math.max(1, t.w - 4), height: Math.max(1, t.h - 4) };
+      for (const o of offsetsInRect(L, r)) keys.add(L.key(o));
+    }
+    return keys;
+  }
+
+  /** Steht auf dem nächsten Wegstück jemand im Weg? */
+  pathBlocked(points) {
+    return this.clearPrefix(points).blocked;
+  }
+
+  /**
+   * Prüft ein Wegstück auf andere Token.
+   * Liefert {blocked, prefix}: prefix = die Punkte bis zum letzten freien Feld vor dem Hindernis.
+   */
+  clearPrefix(points) {
+    if (!this.cfg.avoidTokens || !points.length) return { blocked: false, prefix: points };
+    const L = this.pf.lattice();
+    const cells = this.tokenCells();
+    if (!cells.size) return { blocked: false, prefix: points };
+    const ownKey = L.key(L.offsetOf(this.center()));
+    const pts = [this.center(), ...points];
+    const prefix = [];
+    let lastFree = null;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const steps = Math.max(1, Math.ceil(dist(a, b) / (L.size / 4)));
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const o = L.offsetOf({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+        const k = L.key(o);
+        if (k !== ownKey && cells.has(k)) {
+          if (lastFree && lastFree.k !== ownKey) prefix.push(L.center(lastFree.o));
+          return { blocked: true, prefix };
+        }
+        lastFree = { o, k };
+      }
+      prefix.push(b);
+    }
+    return { blocked: false, prefix: points };
+  }
+
   regionCells(region, { ring = false } = {}) {
     const L = this.pf.lattice();
     const s = L.size;
@@ -309,8 +359,9 @@ class Brain {
     return ids ? ids.map((i) => g.verts[i]) : null;
   }
 
-  async planTo(target, gen) {
+  async planTo(target, gen, { ignoreTokens = false } = {}) {
     this.refreshObstacles();
+    this.pf.tokenCells = this.cfg.avoidTokens && !ignoreTokens ? this.tokenCells() : new Set();
     const from = this.center();
     const shouldAbort = () => !this.ok(gen);
     if (this.cfg.pathing === "routes") {
@@ -333,13 +384,38 @@ class Brain {
   /** Geht zu einem Punkt. Gibt true zurück, wenn er angekommen ist. */
   async goTo(target, gen) {
     this.target = target;
+    const before = this.status;
     try {
-      const legs = await this.planTo(target, gen);
-      if (!legs || !this.ok(gen)) return false;
-      if (!legs.length) return true;
-      drawDebug(this.id, legs);
-      if (this.cfg.role === "server" && Math.random() < 0.25) this.say("walk", { chanceFactor: 0.6 });
-      return await this.walk(legs, gen);
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (!this.ok(gen)) return false;
+        const legs = await this.planTo(target, gen);
+        if (!this.ok(gen)) return false;
+        let result;
+        if (!legs) {
+          // Kein Weg. Gäbe es einen, wenn niemand im Weg stünde? Dann warten.
+          if (!this.cfg.avoidTokens) return false;
+          const free = await this.planTo(target, gen, { ignoreTokens: true });
+          if (!free) return false;
+          // Den Weg gehen, als wäre er frei – walk() bleibt vor dem Hindernis stehen
+          result = free.length ? await this.walk(free, gen) : BLOCKED;
+          if (result === true) return true;
+          if (result !== BLOCKED) return false;
+        } else {
+          if (!legs.length) return true;
+          this.status = before;
+          drawDebug(this.id, legs);
+          if (attempt === 0 && this.cfg.role === "server" && Math.random() < 0.25) this.say("walk", { chanceFactor: 0.6 });
+          result = await this.walk(legs, gen);
+        }
+        if (result !== BLOCKED) return result;
+        // Jemand steht im Weg: stehen bleiben, höflich bitten, kurz warten, neu planen
+        clearDebug(this.id);
+        this.status = "wartet, bis der Weg frei ist";
+        if (attempt === 0 || Math.random() < 0.35) this.say("blocked", { chanceFactor: 1.4 });
+        if (!(await this.sleep(1500 + Math.random() * 1000, gen))) return false;
+      }
+      this.status = "gibt auf – Weg bleibt versperrt";
+      return false;
     } finally {
       this.target = null;
       clearDebug(this.id);
@@ -352,13 +428,22 @@ class Brain {
       if (!pts.length) return true;
       const p = pts;
       pts = [];
+      const check = this.clearPrefix(p);
+      if (check.blocked) {
+        // Bis kurz vor das Hindernis gehen, dort warten
+        if (check.prefix.length) await this.moveAlong(check.prefix, gen);
+        return BLOCKED;
+      }
       return this.moveAlong(p, gen);
     };
     for (const leg of legs) {
       if (!this.ok(gen)) return false;
       if (leg.doors.length) {
         // Vor der Tür stehen bleiben …
-        if (!(await flush())) return false;
+        const f = await flush();
+        if (f !== true) return f;
+        // Steht jemand im Türrahmen oder direkt dahinter? Dann vor der Tür warten.
+        if (this.pathBlocked(leg.points.slice(1))) return BLOCKED;
         const before = this.status;
         this.status = "öffnet eine Tür";
         if (!(await this.sleep(500, gen))) return false;
@@ -368,7 +453,12 @@ class Brain {
           if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
           return false;
         }
-        // … hindurchgehen …
+        // … hindurchgehen (falls inzwischen jemand im Rahmen steht: warten) …
+        if (this.pathBlocked(leg.points.slice(1))) {
+          if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
+          this.status = before;
+          return BLOCKED;
+        }
         const ok = await this.moveAlong(leg.points.slice(1), gen);
         if (!ok) {
           if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
@@ -788,6 +878,8 @@ class BehaviorConfig extends ApplicationV2 {
           <div class="form-group"><label>Tempo (Felder pro Sekunde)</label><input type="number" name="speed" value="${num(c.speed, 3)}" min="0.5" max="20" step="0.5"></div>
           <div class="form-group"><label>Türen hinter sich schließen</label><input type="checkbox" name="closeDoors" ${c.closeDoors ? "checked" : ""}></div>
           <p class="npcb-hint">Der NSC öffnet jede Tür, die nicht verschlossen ist. Ist der Haken gesetzt, bleibt er davor stehen, öffnet, geht hindurch, schließt sie hinter sich und läuft weiter. Ohne Haken bleibt die Tür offen.</p>
+          <div class="form-group"><label>Anderen Token ausweichen</label><input type="checkbox" name="avoidTokens" ${c.avoidTokens ? "checked" : ""}></div>
+          <p class="npcb-hint">Der NSC geht um andere Token herum. Steht jemand im Weg oder im Türrahmen, bleibt er stehen, bittet um Platz und wartet. Ausschalten für fliegende oder geisterhafte Wesen – die ziehen dann einfach über bzw. durch andere Token hinweg.</p>
           <div class="form-group"><label>In Laufrichtung drehen</label><input type="checkbox" name="autoRotate" ${c.autoRotate ? "checked" : ""}></div>
           <div class="form-group"><label>Wegfindung</label>
             <select name="pathing">
@@ -899,6 +991,7 @@ class BehaviorConfig extends ApplicationV2 {
     c.speed = Math.max(0.5, num(val("speed"), 3));
     c.autoRotate = chk("autoRotate");
     c.closeDoors = chk("closeDoors");
+    c.avoidTokens = chk("avoidTokens");
     c.pathing = val("pathing") || "auto";
     c.routes = all("route");
     c.obstacles = all("obstacle");

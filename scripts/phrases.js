@@ -9,7 +9,8 @@ export const POOLS = {
   bar: "An der Theke",
   walk: "Unterwegs (nur Bedienung)",
   idle: "Leerlauf / Herumstehen",
-  patrol: "Patrouille"
+  patrol: "Patrouille",
+  blocked: "Weg versperrt"
 };
 
 export const DEFAULT_PHRASES = {
@@ -69,6 +70,14 @@ export const DEFAULT_PHRASES = {
     "Noch drei Stunden bis zur Ablöse.",
     "*gähnt verstohlen*",
     "Nichts Verdächtiges."
+  ],
+  blocked: [
+    "Darf ich mal durch?",
+    "Entschuldigung …",
+    "Würdet Ihr bitte zur Seite treten?",
+    "*räuspert sich*",
+    "Aus dem Weg, bitte.",
+    "Ich müsste da mal vorbei."
   ]
 };
 
