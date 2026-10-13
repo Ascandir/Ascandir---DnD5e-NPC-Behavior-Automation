@@ -894,11 +894,26 @@ function closeDoorLater(wall, selfDoc) {
   const mid = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
   (async () => {
     await delay(800);
-    for (let i = 0; i < 240; i++) {
+    let holdUntil = 0;
+    for (let i = 0; i < 240;) {
       if (!wall.parent?.walls?.get(wall.id) || wall.ds !== OPEN) return;
+      // NSC vom SL angehalten (z. B. weil er jemanden entdeckt hat) oder Spielpause:
+      // Tür bleibt offen, bis es weitergeht – danach noch kurz Zeit lassen, wieder loszulaufen
+      const selfExists = !!selfDoc?.parent?.tokens?.get(selfDoc.id);
+      if (game.paused || (selfExists && isPaused(selfDoc))) {
+        holdUntil = Date.now() + 4000;
+        await delay(500);
+        continue;
+      }
+      if (Date.now() < holdUntil) {
+        await delay(500);
+        continue;
+      }
+      i++;
       const range = (canvas.grid?.size ?? 100) * 0.9;
+      const selfRange = holdUntil ? range * 2 : range * 0.5;
       const someoneThere = canvas.tokens?.placeables.some((t) => t.document !== selfDoc && dist(t.center, mid) < range)
-        || (selfDoc?.object && dist(selfDoc.object.center, mid) < range * 0.5);
+        || (selfDoc?.object && dist(selfDoc.object.center, mid) < selfRange);
       if (!someoneThere) {
         try { await wall.update({ ds: CLOSED }); } catch (err) { /* egal */ }
         return;
