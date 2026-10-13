@@ -45,6 +45,7 @@ const DEFAULT_CONFIG = {
   role: "server",
   speed: 3,
   autoRotate: false,
+  closeDoors: true,
   pathing: "auto",
   routes: [],
   obstacles: [],
@@ -356,12 +357,31 @@ class Brain {
     for (const leg of legs) {
       if (!this.ok(gen)) return false;
       if (leg.doors.length) {
+        // Vor der Tür stehen bleiben …
         if (!(await flush())) return false;
+        const before = this.status;
+        this.status = "öffnet eine Tür";
+        if (!(await this.sleep(500, gen))) return false;
+        // … öffnen …
         const opened = await openDoors(leg.doors);
-        if (!this.ok(gen)) return false;
+        if (!(await this.sleep(400, gen))) {
+          if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
+          return false;
+        }
+        // … hindurchgehen …
         const ok = await this.moveAlong(leg.points.slice(1), gen);
-        opened.forEach((w) => closeDoorLater(w));
-        if (!ok) return false;
+        if (!ok) {
+          if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
+          return false;
+        }
+        // … und hinter sich wieder schließen (wenn eingestellt)
+        if (this.cfg.closeDoors && opened.length) {
+          this.status = "schließt die Tür";
+          if (!(await this.sleep(400, gen))) { opened.forEach((w) => closeDoorLater(w, this.doc)); return false; }
+          await closeDoorsNow(opened, this.doc);
+          if (!(await this.sleep(400, gen))) return false;
+        }
+        this.status = before;
       } else {
         pts.push(...leg.points.slice(1));
       }
@@ -376,7 +396,7 @@ class Brain {
     const closedOnWay = closedDoorsAlong([this.center(), ...points]);
     if (closedOnWay.length) {
       const opened = await openDoors(closedOnWay);
-      opened.forEach((w) => closeDoorLater(w));
+      if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
       if (!this.ok(gen)) return false;
     }
     const waypoints = points.map((p) => ({ x: Math.round(p.x - t.w / 2), y: Math.round(p.y - t.h / 2) }));
@@ -598,8 +618,24 @@ async function openDoors(walls) {
   return opened;
 }
 
-function closeDoorLater(wall) {
-  if (!setting("closeDoors")) return;
+/** Steht außer dem NSC selbst jemand im Türdurchgang? */
+function someoneInDoorway(wall, selfDoc) {
+  const [x0, y0, x1, y1] = wall.c;
+  const mid = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  const range = (canvas.grid?.size ?? 100) * 0.9;
+  return canvas.tokens?.placeables.some((t) => t.document !== selfDoc && dist(t.center, mid) < range) ?? false;
+}
+
+/** Türen sofort schließen; steht jemand im Weg, später versuchen */
+async function closeDoorsNow(walls, selfDoc) {
+  const CLOSED = CONST.WALL_DOOR_STATES?.CLOSED ?? 0;
+  for (const w of walls) {
+    if (someoneInDoorway(w, selfDoc)) { closeDoorLater(w, selfDoc); continue; }
+    try { await w.update({ ds: CLOSED }); } catch (err) { /* egal */ }
+  }
+}
+
+function closeDoorLater(wall, selfDoc) {
   const OPEN = CONST.WALL_DOOR_STATES?.OPEN ?? 1;
   const CLOSED = CONST.WALL_DOOR_STATES?.CLOSED ?? 0;
   const [x0, y0, x1, y1] = wall.c;
@@ -609,7 +645,8 @@ function closeDoorLater(wall) {
     for (let i = 0; i < 40; i++) {
       if (!wall.parent?.walls?.get(wall.id) || wall.ds !== OPEN) return;
       const range = (canvas.grid?.size ?? 100) * 0.9;
-      const someoneThere = canvas.tokens?.placeables.some((t) => dist(t.center, mid) < range);
+      const someoneThere = canvas.tokens?.placeables.some((t) => t.document !== selfDoc && dist(t.center, mid) < range)
+        || (selfDoc?.object && dist(selfDoc.object.center, mid) < range * 0.5);
       if (!someoneThere) {
         try { await wall.update({ ds: CLOSED }); } catch (err) { /* egal */ }
         return;
@@ -749,6 +786,8 @@ class BehaviorConfig extends ApplicationV2 {
           <div class="form-group"><label>Verhalten</label>
             <select name="role">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${k === c.role ? "selected" : ""}>${v}</option>`).join("")}</select></div>
           <div class="form-group"><label>Tempo (Felder pro Sekunde)</label><input type="number" name="speed" value="${num(c.speed, 3)}" min="0.5" max="20" step="0.5"></div>
+          <div class="form-group"><label>Türen hinter sich schließen</label><input type="checkbox" name="closeDoors" ${c.closeDoors ? "checked" : ""}></div>
+          <p class="npcb-hint">Der NSC öffnet jede Tür, die nicht verschlossen ist. Ist der Haken gesetzt, bleibt er davor stehen, öffnet, geht hindurch, schließt sie hinter sich und läuft weiter. Ohne Haken bleibt die Tür offen.</p>
           <div class="form-group"><label>In Laufrichtung drehen</label><input type="checkbox" name="autoRotate" ${c.autoRotate ? "checked" : ""}></div>
           <div class="form-group"><label>Wegfindung</label>
             <select name="pathing">
@@ -859,6 +898,7 @@ class BehaviorConfig extends ApplicationV2 {
     c.role = val("role") || "server";
     c.speed = Math.max(0.5, num(val("speed"), 3));
     c.autoRotate = chk("autoRotate");
+    c.closeDoors = chk("closeDoors");
     c.pathing = val("pathing") || "auto";
     c.routes = all("route");
     c.obstacles = all("obstacle");
@@ -1021,11 +1061,6 @@ Hooks.once("init", () => {
   reg("stopInCombat", {
     name: "Im Kampf anhalten",
     hint: "Sobald in der Szene ein Kampf läuft, bleiben alle NSCs stehen.",
-    type: Boolean, default: true
-  });
-  reg("closeDoors", {
-    name: "Türen hinter sich schließen",
-    hint: "Türen, die ein NSC geöffnet hat, schließt er wieder, sobald niemand mehr im Durchgang steht.",
     type: Boolean, default: true
   });
   reg("secretDoors", {

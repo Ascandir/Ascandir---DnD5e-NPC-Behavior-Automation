@@ -46,7 +46,11 @@ Ein Sitzbereich ist **besetzt**, sobald ein sichtbarer Token darin steht. NSCs, 
 
 ## Wege finden
 
-**Automatisch (Standard):** Der NSC sucht selbst einen Weg um Wände herum. Muss er in einen anderen Raum, nimmt er die nächste Tür oder Lücke. Geschlossene Türen öffnet er und schließt sie hinter sich wieder. **Verschlossene** Türen benutzt er nie, Geheimtüren nur, wenn du es in den Moduleinstellungen erlaubst.
+**Automatisch (Standard):** Der NSC sucht selbst einen Weg um Wände herum. Muss er in einen anderen Raum, nimmt er die nächste Tür oder Lücke. **Verschlossene** Türen benutzt er nie, Geheimtüren nur, wenn du es in den Moduleinstellungen erlaubst.
+
+**Türen:** Jeder NSC öffnet Türen, die nicht verschlossen sind. Pro NSC stellst du ein, ob er sie wieder schließt:
+- **Türen hinter sich schließen ✔ (Standard):** Er bleibt vor der Tür stehen, öffnet sie, tritt hindurch, schließt sie hinter sich und läuft weiter. Steht gerade jemand anderes im Durchgang, wartet die Tür, bis der Weg frei ist.
+- **ohne Haken:** Er öffnet die Tür, geht hindurch und lässt sie offen.
 
 **Gezeichnete Wege (optional):** Du kannst Wege selbst vorgeben:
 
@@ -79,7 +83,6 @@ Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel finde
 | Belebung aktiv | an |
 | Bei Spielpause anhalten | an |
 | Im Kampf anhalten | an |
-| Türen hinter sich schließen | an |
 | NSCs benutzen Geheimtüren | aus |
 | Geplante Wege anzeigen (nur SL) | aus – zeigt den geplanten Weg als orange Linie, Türdurchgänge blau |
 
