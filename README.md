@@ -14,15 +14,26 @@ https://github.com/Ascandir/Ascandir---DnD5e-NPC-Behavior-Automation/releases/la
 
 ## Schnellstart: belebte Taverne
 
-1. **Tische markieren:** Links das Werkzeug **Regionen** wählen und um jeden Tisch (mit Stühlen) ein Rechteck ziehen. Region benennen, z. B. „Tisch 1“, „Tisch 2“.
-2. **Theke markieren:** Genauso eine Region „Theke“ ziehen – dort, wo die Bedienung ihre Bestellungen abholt.
+Pro Tisch legst du **zwei Regionen** an (Werkzeug **Regionen** links):
+
+| Region | Was du ziehst | Beispielname |
+|---|---|---|
+| **Tischfläche** | genau über die Tischplatte | „Tisch 1 – Platte“ |
+| **Sitzbereich** | um Tisch *und* Stühle herum, ruhig ein Feld großzügiger | „Tisch 1 – Sitzplätze“ |
+
+1. Für jeden Tisch Tischfläche und Sitzbereich ziehen.
+2. **Theke markieren:** eine Region „Theke“ ziehen – dort, wo die Bedienung ihre Bestellungen abholt. Den Tresen selbst kannst du zusätzlich als Tischfläche markieren.
 3. **Bedienung einstellen:** Rechtsklick auf den Token der Bedienung → Knopf mit dem laufenden Männchen (🚶).
    - Verhalten aktiv: ✔
    - Verhalten: **Bedienung**
-   - Tische ankreuzen, Theke auswählen → **Speichern**
-4. Fertig. Setzt sich ein Spieler (oder ein Gäste-NSC) an einen Tisch, kommt die Bedienung vorbei, wartet ein bisschen, geht zur Theke und weiter.
+   - **Hindernisse:** alle Tischflächen ankreuzen
+   - **Sitzbereiche:** alle Sitzbereiche ankreuzen
+   - Theke auswählen → **Speichern**
+4. Fertig. Setzt sich ein Spieler (oder ein Gäste-NSC) in einen Sitzbereich, kommt die Bedienung, stellt sich auf ein freies Feld **neben** die Gäste, wartet ein bisschen, geht zur Theke und weiter.
 
-Ein Tisch ist **besetzt**, sobald ein sichtbarer Token in seiner Region steht. NSCs, die selbst gerade laufen (Bedienung, Patrouille, Umherschlendern), zählen nicht als Gäste. NSCs mit „Stehen & Reden“ zählen als Gäste.
+**Hindernisse** werden nie betreten – auch nicht im Vorbeigehen. Sie gelten für **alle** NSCs der Szene: Hakst du die Tischflächen bei der Bedienung an, laufen auch Wachen und Gäste nicht mehr über die Tische.
+
+Ein Sitzbereich ist **besetzt**, sobald ein sichtbarer Token darin steht. NSCs, die selbst gerade laufen (Bedienung, Patrouille, Umherschlendern), zählen nicht als Gäste. NSCs mit „Stehen & Reden“ zählen als Gäste.
 
 ## Verhalten
 

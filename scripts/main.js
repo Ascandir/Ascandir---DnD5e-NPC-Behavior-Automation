@@ -47,6 +47,7 @@ const DEFAULT_CONFIG = {
   autoRotate: false,
   pathing: "auto",
   routes: [],
+  obstacles: [],
   server: { tables: [], bar: "", tableWait: [6, 15], barWait: [4, 10], whenEmpty: "bar" },
   patrol: { route: "", mode: "loop", wait: [0, 2], longPauseChance: 15, longPause: [8, 20] },
   wander: { region: "", wait: [4, 12] },
@@ -218,6 +219,15 @@ class Brain {
 
   /* --- Position & Felder --- */
 
+  /** Tischflächen & andere Hindernisse dieser Szene an die Wegfindung geben */
+  refreshObstacles() {
+    // Hindernisse gelten für alle NSCs der Szene, egal bei wem sie angehakt sind
+    const scene = canvas.scene;
+    const ids = new Set();
+    for (const d of scene?.tokens ?? []) for (const id of d.getFlag(MID, "config")?.obstacles ?? []) ids.add(id);
+    this.pf.obstacles = [...ids].map((id) => scene.regions.get(id)).filter(Boolean);
+  }
+
   center() {
     const t = this.doc.object;
     if (t?.center) return { x: t.center.x, y: t.center.y };
@@ -254,6 +264,8 @@ class Brain {
       if (!L.inBounds(o)) return false;
       let inside = false;
       try { inside = region.testPoint({ ...L.center(o), elevation }); } catch (err) { inside = false; }
+      if (!ring && inside && this.pf.inObstacle(L.center(o))) return false;
+      if (ring && this.pf.inObstacle(L.center(o))) return false;
       return ring ? !inside : inside;
     });
   }
@@ -297,6 +309,7 @@ class Brain {
   }
 
   async planTo(target, gen) {
+    this.refreshObstacles();
     const from = this.center();
     const shouldAbort = () => !this.ok(gen);
     if (this.cfg.pathing === "routes") {
@@ -387,6 +400,7 @@ class Brain {
   /** Freies Feld in (oder direkt an) einer Region suchen und hingehen */
   async goToRegion(region, gen, { nearGuests = false } = {}) {
     const L = this.pf.lattice();
+    this.refreshObstacles();
     const occupied = this.occupiedKeys();
     let cells = this.regionCells(region).filter((o) => !occupied.has(L.key(o)));
     if (nearGuests) cells.push(...this.regionCells(region, { ring: true }).filter((o) => !occupied.has(L.key(o))));
@@ -416,9 +430,10 @@ class Brain {
   async goToPoint(point, gen) {
     const L = this.pf.lattice();
     const occupied = this.occupiedKeys();
+    this.refreshObstacles();
     let o = L.offsetOf(point);
-    if (occupied.has(L.key(o))) {
-      const free = L.neighbors(o).filter((n) => L.inBounds(n) && !occupied.has(L.key(n)));
+    if (occupied.has(L.key(o)) || this.pf.inObstacle(L.center(o))) {
+      const free = L.neighbors(o).filter((n) => L.inBounds(n) && !occupied.has(L.key(n)) && !this.pf.inObstacle(L.center(n)));
       if (!free.length) return false;
       o = pickRandom(free);
     }
@@ -709,6 +724,9 @@ class BehaviorConfig extends ApplicationV2 {
         <input type="number" name="${name}-0" value="${num(val?.[0])}" min="0" step="${step}"> bis
         <input type="number" name="${name}-1" value="${num(val?.[1])}" min="0" step="${step}"> Sek.
       </span>`;
+    const obstacleChecks = regions.length
+      ? regions.map((r) => `<label class="npcb-check"><input type="checkbox" name="obstacle" value="${r.id}" ${c.obstacles.includes(r.id) ? "checked" : ""}> ${esc(r.name)}</label>`).join("")
+      : `<p class="npcb-hint">Noch keine Regionen in dieser Szene.</p>`;
     const tableChecks = regions.length
       ? regions.map((r) => `<label class="npcb-check"><input type="checkbox" name="table" value="${r.id}" ${c.server.tables.includes(r.id) ? "checked" : ""}> ${esc(r.name)}</label>`).join("")
       : `<p class="npcb-hint warn">Diese Szene hat noch keine Regionen. Zeichne mit dem Regionen-Werkzeug (links) einen Bereich um jeden Tisch und einen um die Theke und gib ihnen Namen wie „Tisch 1“ oder „Theke“.</p>`;
@@ -737,6 +755,7 @@ class BehaviorConfig extends ApplicationV2 {
               <option value="auto" ${c.pathing === "auto" ? "selected" : ""}>Automatisch (sucht Türen & Durchgänge selbst)</option>
               <option value="routes" ${c.pathing === "routes" ? "selected" : ""}>Bevorzugt über gezeichnete Wege</option>
             </select></div>
+          <div class="form-group stacked"><label>Hindernisse <small>(Tischflächen, Tresen … – werden nie betreten; gilt für alle NSCs dieser Szene)</small></label><div class="npcb-checklist">${obstacleChecks}</div></div>
           <div class="npcb-sub" data-show-pathing="routes">
             <p class="npcb-hint">Diese Wege nutzt der NSC wie Gänge. Den Rest findet er automatisch.</p>
             ${routeChecks}
@@ -745,7 +764,7 @@ class BehaviorConfig extends ApplicationV2 {
 
         <fieldset data-role="server">
           <legend>Bedienung</legend>
-          <div class="form-group stacked"><label>Tische (Regionen)</label><div class="npcb-checklist">${tableChecks}</div></div>
+          <div class="form-group stacked"><label>Sitzbereiche <small>(Region um Tisch und Stühle – dort sitzen die Gäste, dort wird bedient)</small></label><div class="npcb-checklist">${tableChecks}</div></div>
           <div class="form-group"><label>Theke (Region)</label><select name="bar">${regionOptions(c.server.bar)}</select></div>
           <div class="form-group"><label>Wartezeit am Tisch</label>${range("tableWait", c.server.tableWait)}</div>
           <div class="form-group"><label>Wartezeit an der Theke</label>${range("barWait", c.server.barWait)}</div>
@@ -755,7 +774,7 @@ class BehaviorConfig extends ApplicationV2 {
               <option value="wander" ${c.server.whenEmpty === "wander" ? "selected" : ""}>an der Theke hin und her gehen</option>
               <option value="stay" ${c.server.whenEmpty === "stay" ? "selected" : ""}>stehen bleiben</option>
             </select></div>
-          <p class="npcb-hint">Ein Tisch gilt als besetzt, sobald ein sichtbarer Token in seiner Region steht (Spieler oder Gäste-NSCs). Andere laufende NSCs zählen nicht als Gäste.</p>
+          <p class="npcb-hint">Ein Sitzbereich gilt als besetzt, sobald ein sichtbarer Token darin steht (Spieler oder Gäste-NSCs). Andere laufende NSCs zählen nicht als Gäste. Die Bedienung stellt sich auf ein freies Feld neben die Gäste – nie auf eine Tischfläche (siehe „Hindernisse“ oben).</p>
         </fieldset>
 
         <fieldset data-role="patrol">
@@ -842,6 +861,7 @@ class BehaviorConfig extends ApplicationV2 {
     c.autoRotate = chk("autoRotate");
     c.pathing = val("pathing") || "auto";
     c.routes = all("route");
+    c.obstacles = all("obstacle");
     c.server.tables = all("table");
     c.server.bar = val("bar");
     c.server.tableWait = rng("tableWait");

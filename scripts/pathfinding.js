@@ -272,6 +272,28 @@ export class TokenPathfinder {
     this.secretDoors = secretDoors;
     this.cache = new Map();
     this.version = -1;
+    this.obstacles = [];   // Regionen, die nie betreten werden (z. B. Tischflächen)
+  }
+
+  /** Liegt der Punkt in einem Hindernis (z. B. auf einem Tisch)? */
+  inObstacle(p) {
+    if (!this.obstacles.length) return false;
+    const elevation = this.doc.elevation ?? 0;
+    for (const r of this.obstacles) {
+      try { if (r.testPoint({ x: p.x, y: p.y, elevation })) return true; } catch (err) { /* ignorieren */ }
+    }
+    return false;
+  }
+
+  /** Streift die Strecke ein Hindernis? (Stichproben alle Viertelfeld) */
+  segmentHitsObstacle(a, b) {
+    if (!this.obstacles.length) return false;
+    const steps = Math.max(1, Math.ceil(dist(a, b) / (this.lattice().size / 4)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      if (this.inObstacle({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })) return true;
+    }
+    return false;
   }
 
   get token() { return this.doc.object; }
@@ -339,13 +361,16 @@ export class TokenPathfinder {
   clearForToken(a, b) {
     const main = this.testSegment(a, b);
     if (!main || main.doors.length) return false;
+    if (this.segmentHitsObstacle(a, b)) return false;
     const len = dist(a, b);
     if (len < 1) return true;
     const r = this.lattice().size * 0.3;
     const nx = -(b.y - a.y) / len * r, ny = (b.x - a.x) / len * r;
     for (const s of [1, -1]) {
-      const t = this.testSegment({ x: a.x + nx * s, y: a.y + ny * s }, { x: b.x + nx * s, y: b.y + ny * s });
+      const a2 = { x: a.x + nx * s, y: a.y + ny * s }, b2 = { x: b.x + nx * s, y: b.y + ny * s };
+      const t = this.testSegment(a2, b2);
       if (!t || t.doors.length) return false;
+      if (this.segmentHitsObstacle(a2, b2)) return false;
     }
     return true;
   }
@@ -358,6 +383,14 @@ export class TokenPathfinder {
     const L = this.lattice();
     const start = L.offsetOf(fromPoint);
     const goal = L.offsetOf(toPoint);
+    const startKey = L.key(start);
+    const blockedCell = new Map();
+    const cellBlocked = (o) => {
+      const k = L.key(o);
+      if (k === startKey) return false; // Wer schon auf einem Tisch steht, darf herunter
+      if (!blockedCell.has(k)) blockedCell.set(k, this.inObstacle(L.center(o)));
+      return blockedCell.get(k);
+    };
     const nodes = await aStar({
       start, goal,
       key: L.key,
@@ -368,7 +401,7 @@ export class TokenPathfinder {
       doorPenalty: L.size * 2,
       maxNodes: maxNodes ?? 25000,
       shouldAbort,
-      edge: (o1, o2) => this.testSegment(L.center(o1), L.center(o2))
+      edge: (o1, o2) => (cellBlocked(o2) ? null : this.testSegment(L.center(o1), L.center(o2)))
     });
     if (!nodes) return null;
     // Echte Startposition statt Feldmitte verwenden
