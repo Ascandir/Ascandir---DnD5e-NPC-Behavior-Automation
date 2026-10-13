@@ -221,7 +221,9 @@ const C = () => ({
 export function makeLattice() {
   const grid = canvas.grid;
   const size = grid.size;
-  const rect = canvas.dimensions.sceneRect;
+  // Ganze Leinwand inkl. grauem Rand – NSCs dürfen die Karte verlassen
+  const d = canvas.dimensions;
+  const rect = { x: 0, y: 0, width: d.width, height: d.height };
   const inScene = (c) => c.x >= rect.x && c.x <= rect.x + rect.width && c.y >= rect.y && c.y <= rect.y + rect.height;
   const key = (o) => `${o.i},${o.j}`;
 

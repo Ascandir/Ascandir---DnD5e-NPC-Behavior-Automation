@@ -47,6 +47,7 @@ const DEFAULT_CONFIG = {
   autoRotate: false,
   closeDoors: true,
   avoidTokens: true,
+  hideOffmap: true,
   pathing: "auto",
   routes: [],
   obstacles: [],
@@ -216,6 +217,7 @@ class Brain {
   say(pool, { chanceFactor = 1 } = {}) {
     const b = this.cfg.bubbles;
     if (!b.enabled) return;
+    if (this.doc.getFlag(MID, "offmap")) return; // außerhalb der Karte redet niemand
     if (Math.random() * 100 >= num(b.chance, 60) * chanceFactor) return;
     broadcastBubble(this.doc, drawLine(this.doc, this.cfg, pool));
   }
@@ -479,7 +481,62 @@ class Brain {
     return flush();
   }
 
+  /** Liegt ein Punkt auf der eigentlichen Karte (nicht im grauen Rand)? */
+  static onMap(p) {
+    const r = canvas.dimensions.sceneRect;
+    return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
+  }
+
+  /** Beim Verlassen der Karte ausblenden, beim Zurückkommen wieder einblenden */
+  async setOffmap(off) {
+    const flagged = !!this.doc.getFlag(MID, "offmap");
+    if (off === flagged) return;
+    if (off) {
+      if (!this.cfg.hideOffmap || this.doc.hidden) return; // vom SL versteckte Token nicht anfassen
+      await this.doc.update({ hidden: true, [`flags.${MID}.offmap`]: true });
+    } else {
+      await this.doc.update({ hidden: false, [`flags.${MID}.offmap`]: false });
+    }
+  }
+
+  /**
+   * Bewegt den Token entlang der Punkte. Verlässt der Weg die Karte, wird er an der Kartengrenze
+   * geteilt: dort wird der Token aus- bzw. wieder eingeblendet.
+   */
   async moveAlong(points, gen) {
+    if (!points.length) return false;
+    const pieces = [];
+    let cur = [];
+    let prev = this.center();
+    let prevOn = Brain.onMap(prev);
+    for (const p of points) {
+      const on = Brain.onMap(p);
+      if (on !== prevOn) {
+        // Grenzpunkt per Halbierung suchen
+        let lo = prev, hi = p;
+        for (let i = 0; i < 20; i++) {
+          const mid = { x: (lo.x + hi.x) / 2, y: (lo.y + hi.y) / 2 };
+          if (Brain.onMap(mid) === prevOn) lo = mid; else hi = mid;
+        }
+        cur.push(lo);
+        pieces.push({ points: cur, offmapAfter: !on });
+        cur = [];
+      }
+      cur.push(p);
+      prev = p;
+      prevOn = on;
+    }
+    pieces.push({ points: cur, offmapAfter: null });
+    for (const piece of pieces) {
+      if (piece.points.length && !(await this._moveRaw(piece.points, gen))) return false;
+      if (piece.offmapAfter !== null) await this.setOffmap(piece.offmapAfter);
+    }
+    // Sicherheitsnetz: Status passend zur tatsächlichen Position
+    await this.setOffmap(!Brain.onMap(this.center()));
+    return this.ok(gen);
+  }
+
+  async _moveRaw(points, gen) {
     const t = this.doc.object;
     if (!t || !points.length || !this.ok(gen)) return false;
     // Falls inzwischen jemand eine Tür auf dem Weg geschlossen hat: wieder öffnen
@@ -917,6 +974,8 @@ class BehaviorConfig extends ApplicationV2 {
               <option value="pingpong" ${c.patrol.mode === "pingpong" ? "selected" : ""}>Hin und zurück</option>
             </select></div>
           <div class="form-group"><label>Wartezeit an jedem Punkt</label>${range("patrolWait", c.patrol.wait)}</div>
+          <div class="form-group"><label>Außerhalb der Karte unsichtbar</label><input type="checkbox" name="hideOffmap" ${c.hideOffmap ? "checked" : ""}></div>
+          <p class="npcb-hint">Punkte des Weges dürfen im grauen Rand außerhalb der Karte liegen. Dann verlässt der NSC die Karte (z. B. durchs Stadttor), wird dort unsichtbar, wartet und taucht beim Zurückkommen wieder auf.</p>
           <div class="form-group"><label>Chance auf längere Pause (%)</label><input type="number" name="longPauseChance" value="${num(c.patrol.longPauseChance, 15)}" min="0" max="100"></div>
           <div class="form-group"><label>Längere Pause</label>${range("longPause", c.patrol.longPause)}</div>
         </fieldset>
@@ -1002,6 +1061,7 @@ class BehaviorConfig extends ApplicationV2 {
     c.server.whenEmpty = val("whenEmpty") || "bar";
     c.patrol.route = val("patrolRoute");
     c.patrol.mode = val("patrolMode") || "loop";
+    c.hideOffmap = chk("hideOffmap");
     c.patrol.wait = rng("patrolWait");
     c.patrol.longPauseChance = num(val("longPauseChance"), 15);
     c.patrol.longPause = rng("longPause");
@@ -1208,7 +1268,7 @@ Hooks.on("userConnected", () => setTimeout(syncBrains, 500));
 
 Hooks.on("updateToken", (doc, changes, options) => {
   if (doc.parent !== canvas.scene) return;
-  if (foundry.utils.hasProperty(changes, `flags.${MID}`) || changes.flags?.[`-=${MID}`] !== undefined) {
+  if (foundry.utils.hasProperty(changes, `flags.${MID}.config`) || changes.flags?.[`-=${MID}`] !== undefined) {
     restartBrain(doc.id);
     return;
   }

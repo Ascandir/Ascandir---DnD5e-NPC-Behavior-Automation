@@ -62,6 +62,8 @@ Ein Sitzbereich ist **besetzt**, sobald ein sichtbarer Token darin steht. NSCs, 
 
 Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel findet er selbst hin. Für die **Patrouille** wählst du den Weg direkt aus, jeder Punkt der Linie ist ein Halt.
 
+**Karte verlassen:** Punkte des Patrouillenwegs dürfen im grauen Rand **außerhalb der Karte** liegen. Die Wache läuft dann z. B. durchs Stadttor hinaus, wird am Kartenrand **unsichtbar**, wartet draußen und taucht beim Zurückkommen am Rand wieder auf. Mit dem Haken „Außerhalb der Karte unsichtbar“ (Patrouille, Standard an) schaltest du das Ausblenden ab. Token, die du selbst versteckt hast, blendet das Modul nie ein.
+
 ## Sprechblasen
 
 - Jede Situation hat eigene Sätze: am Tisch, an der Theke, unterwegs (nur Bedienung), Leerlauf, Patrouille.
