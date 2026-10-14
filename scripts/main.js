@@ -1413,9 +1413,21 @@ Hooks.on("updateToken", (doc, changes, options) => {
   if (method && method !== "api" && brains.has(doc.id)) brains.get(doc.id).interrupt(15000);
 });
 
-for (const hook of ["createWall", "updateWall", "deleteWall"]) {
+for (const hook of ["createWall", "deleteWall"]) {
   Hooks.on(hook, () => { TokenPathfinder.wallVersion++; });
 }
+Hooks.on("updateWall", (wall, changes) => {
+  // Nur Tür auf/zu/verriegelt (oder Modul-Daten an der Wand): ausschließlich Strecken durch diese Tür neu prüfen.
+  // Das passiert ständig, wenn NSCs Türen benutzen – den ganzen Wegspeicher zu verwerfen wäre teuer.
+  const keys = Object.keys(foundry.utils.flattenObject(changes ?? {})).filter((k) => k !== "_id");
+  const doorOnly = keys.length > 0 && keys.every((k) => k === "ds" || k.startsWith("flags."));
+  if (!doorOnly) {
+    TokenPathfinder.wallVersion++;
+    return;
+  }
+  if (!("ds" in (changes ?? {}))) return; // nur Flags – für die Wegfindung egal
+  for (const b of brains.values()) b.pf.forgetWall(wall);
+});
 for (const hook of ["createDrawing", "updateDrawing", "deleteDrawing"]) {
   Hooks.on(hook, () => { routeVersion++; });
 }

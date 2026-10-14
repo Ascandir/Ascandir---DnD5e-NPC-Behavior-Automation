@@ -325,11 +325,12 @@ export class TokenPathfinder {
     }
     const k = `${Math.round(a.x)},${Math.round(a.y)}>${Math.round(b.x)},${Math.round(b.y)}`;
     let r;
-    if (this.cache.has(k)) r = this.cache.get(k);
+    const hit = this.cache.get(k);
+    if (hit) r = hit.r;
     else {
       r = this._testSegment(a, b);
       if (this.cache.size > 60000) this.cache.clear();
-      this.cache.set(k, r);
+      this.cache.set(k, { r, a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y } });
     }
     // Offen gehaltene Türen zählen weiter als Tür, damit der NSC sie danach wieder schließt
     if (r && this.heldDoors.size) {
@@ -341,6 +342,17 @@ export class TokenPathfinder {
       if (extra.length) r = { doors: [...r.doors, ...extra] };
     }
     return r;
+  }
+
+  /**
+   * Eine einzelne Tür wurde geöffnet, geschlossen oder (ent)riegelt: nur die gemerkten Strecken
+   * vergessen, die diese Tür kreuzen. Alles andere bleibt gültig.
+   */
+  forgetWall(wallDoc) {
+    if (this.version !== TokenPathfinder.wallVersion) return; // wird ohnehin komplett verworfen
+    const [x0, y0, x1, y1] = wallDoc.c;
+    const c = { x: x0, y: y0 }, d = { x: x1, y: y1 };
+    for (const [k, v] of this.cache) if (segmentsCross(v.a, v.b, c, d)) this.cache.delete(k);
   }
 
   _coreCollides(a, b) {
