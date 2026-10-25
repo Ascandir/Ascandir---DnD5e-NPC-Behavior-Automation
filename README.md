@@ -85,7 +85,7 @@ Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel finde
 - **Übersicht:** alle NSCs der Szene mit aktuellem Status („geht zu Tisch 2“, „pausiert (SL)“ …). Pro NSC: ⏸/▶ pausieren/fortsetzen, ⏻ Verhalten ein/aus, ⚙ einstellen.
 - **Tot oder bewusstlos:** Hat der Token den Status *Tot* oder *Bewusstlos* oder 0 TP, wird er sofort **pausiert**. Solange er tot ist, ist der Fortsetzen-Knopf ausgegraut. Wird er geheilt oder wiederbelebt, **bleibt er pausiert**, bis du ihn selbst mit ▶ fortsetzt.
 - Schiebst du einen NSC selbst, macht er 15 Sekunden Pause und läuft dann von dort weiter.
-- Bei **Spielpause** und während eines **Kampfes** bleiben alle stehen (beides abschaltbar).
+- Bei **Spielpause** und während eines **Kampfes** bleiben alle sofort stehen – auch mitten auf dem Weg, spätestens am Ende des Feldes, auf dem sie gerade laufen. Danach geht es von dort weiter (beides abschaltbar).
 
 ## Moduleinstellungen
 

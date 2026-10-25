@@ -108,6 +108,18 @@ function combatRunning() {
   return game.combats?.some((c) => c.started && (!c.scene || c.scene.id === canvas.scene?.id)) ?? false;
 }
 
+/** Punktfolge so auffüllen, dass zwischen zwei Punkten höchstens ein Feld liegt */
+function densify(start, points, step) {
+  const out = [];
+  let prev = start;
+  for (const p of points) {
+    const n = Math.max(1, Math.ceil(dist(prev, p) / step - 0.01));
+    for (let i = 1; i <= n; i++) out.push({ x: prev.x + (p.x - prev.x) * (i / n), y: prev.y + (p.y - prev.y) * (i / n) });
+    prev = p;
+  }
+  return out;
+}
+
 /** Läuft gerade gar nichts? (aus, Pause, Kampf) */
 function blocked() {
   if (!setting("active")) return true;
@@ -651,22 +663,62 @@ class Brain {
       if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
       if (!this.ok(gen)) return false;
     }
-    const waypoints = points.map((p) => ({ x: Math.round(p.x - t.w / 2), y: Math.round(p.y - t.h / 2) }));
-    let result = false;
-    try {
-      result = await this.doc.move(waypoints, {
-        autoRotate: !!this.cfg.autoRotate,
-        showRuler: false,
-        pan: false,
-        animation: { movementSpeed: Math.max(0.5, num(this.cfg.speed, 3)) },
-        constrainOptions: { ignoreWalls: true, ignoreCost: true }
-      });
-    } catch (err) {
-      console.warn(`${MID} | Bewegung von ${this.doc.name} fehlgeschlagen`, err);
-      return false;
+    // Weg in einzelne Felder zerlegen: jedes Feld ist ein Haltepunkt.
+    // So kann der NSC bei Spielpause/Kampf mitten auf dem Weg stehen bleiben statt erst an der nächsten Ecke.
+    let fine = densify(this.center(), points, canvas.grid?.size ?? 100);
+    while (fine.length) {
+      if (!this.ok(gen)) return false;
+      // Pausiert (Spielpause, Kampf, Hauptschalter)? Dann hier warten und danach weiterlaufen.
+      if (blocked()) {
+        if (!(await this.waitUnblocked(gen))) return false;
+        continue;
+      }
+      const tw = this.doc.object?.w ?? t.w, th = this.doc.object?.h ?? t.h;
+      const waypoints = fine.map((p) => ({ x: Math.round(p.x - tw / 2), y: Math.round(p.y - th / 2), checkpoint: true }));
+      let stoppedForPause = false;
+      const watcher = setInterval(() => {
+        if (!stoppedForPause && blocked()) {
+          stoppedForPause = true;
+          this._stopMovement(); // hält am Ende des aktuellen Feldes
+        }
+      }, 100);
+      let result = false;
+      try {
+        result = await this.doc.move(waypoints, {
+          autoRotate: !!this.cfg.autoRotate,
+          showRuler: false,
+          pan: false,
+          animation: { movementSpeed: Math.max(0.5, num(this.cfg.speed, 3)) },
+          constrainOptions: { ignoreWalls: true, ignoreCost: true }
+        });
+      } catch (err) {
+        console.warn(`${MID} | Bewegung von ${this.doc.name} fehlgeschlagen`, err);
+        result = false;
+      } finally {
+        clearInterval(watcher);
+      }
+      try { await (this.doc.object?.movementAnimationPromise ?? null); } catch (err) { /* abgebrochen */ }
+      if (!this.ok(gen)) return false;
+      if (!stoppedForPause) return result !== false;
+      // Wegen Pause angehalten: Rest des Weges ab der aktuellen Position merken
+      const here = this.center();
+      let idx = -1, best = Infinity;
+      fine.forEach((p, i) => { const d = dist(p, here); if (d < best) { best = d; idx = i; } });
+      fine = best <= (canvas.grid?.size ?? 100) * 0.25 ? fine.slice(idx + 1) : fine.slice(Math.max(0, idx));
     }
-    try { await (this.doc.object?.movementAnimationPromise ?? null); } catch (err) { /* abgebrochen */ }
-    return result !== false && this.ok(gen);
+    return this.ok(gen);
+  }
+
+  /** Wartet, bis Spielpause/Kampf/Hauptschalter vorbei sind */
+  async waitUnblocked(gen) {
+    const before = this.status;
+    while (blocked()) {
+      if (!this.ok(gen)) return false;
+      this.status = game.paused ? "pausiert (Spielpause)" : combatRunning() ? "pausiert (Kampf)" : "ausgeschaltet";
+      await delay(250);
+    }
+    this.status = before;
+    return this.ok(gen);
   }
 
   /** Freies Feld in (oder direkt an) einer Region suchen und hingehen */
