@@ -131,16 +131,18 @@ function combatRunning() {
   return game.combats?.some((c) => c.started && (!c.scene || c.scene.id === canvas.scene?.id)) ?? false;
 }
 
-/** Punktfolge so auffüllen, dass zwischen zwei Punkten höchstens ein Feld liegt */
-function densify(start, points, step) {
-  const out = [];
-  let prev = start;
-  for (const p of points) {
-    const n = Math.max(1, Math.ceil(dist(prev, p) / step - 0.01));
-    for (let i = 1; i <= n; i++) out.push({ x: prev.x + (p.x - prev.x) * (i / n), y: prev.y + (p.y - prev.y) * (i / n) });
-    prev = p;
+/** Rest eines Weges ab einer Position: alle Punkte nach dem Wegstück, auf dem die Position liegt */
+function remainingPath(poly, here) {
+  let best = Infinity, idx = 0;
+  for (let i = 0; i + 1 < poly.length; i++) {
+    const a = poly[i], b = poly[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((here.x - a.x) * dx + (here.y - a.y) * dy) / len2));
+    const d = Math.hypot(a.x + dx * t - here.x, a.y + dy * t - here.y);
+    if (d < best) { best = d; idx = i; }
   }
-  return out;
+  return poly.slice(idx + 1);
 }
 
 /** Läuft gerade gar nichts? (aus, Pause, Kampf) */
@@ -278,6 +280,7 @@ class Brain {
       }
       const h = this.halted();
       if (h && !this._wasHalted) {
+        this.freezeHere();
         this.interrupt();
         this.releaseHeldDoors?.();
       }
@@ -695,25 +698,20 @@ class Brain {
       if (this.cfg.closeDoors) opened.forEach((w) => closeDoorLater(w, this.doc));
       if (!this.ok(gen)) return false;
     }
-    // Weg in einzelne Felder zerlegen: jedes Feld ist ein Haltepunkt.
-    // So kann der NSC bei Spielpause/Kampf mitten auf dem Weg stehen bleiben statt erst an der nächsten Ecke.
-    let fine = densify(this.center(), points, canvas.grid?.size ?? 100);
-    while (fine.length) {
+    // Ein Bewegungsauftrag für den ganzen Weg = eine einzige Änderung am Token.
+    // (Jeder Haltepunkt wäre eine eigene Änderung, und darauf reagieren andere Module wie
+    //  Gatherer mit Neuzeichnen ihrer Fenster. Deshalb keine Haltepunkte pro Feld.)
+    let remaining = points;
+    while (remaining.length) {
       if (!this.ok(gen)) return false;
       // Pausiert (Spielpause, Kampf, Hauptschalter)? Dann hier warten und danach weiterlaufen.
       if (blocked()) {
         if (!(await this.waitUnblocked(gen))) return false;
         continue;
       }
+      const from = this.center();
       const tw = this.doc.object?.w ?? t.w, th = this.doc.object?.h ?? t.h;
-      const waypoints = fine.map((p) => ({ x: Math.round(p.x - tw / 2), y: Math.round(p.y - th / 2), checkpoint: true }));
-      let stoppedForPause = false;
-      const watcher = setInterval(() => {
-        if (!stoppedForPause && blocked()) {
-          stoppedForPause = true;
-          this._stopMovement(); // hält am Ende des aktuellen Feldes
-        }
-      }, 100);
+      const waypoints = remaining.map((p) => ({ x: Math.round(p.x - tw / 2), y: Math.round(p.y - th / 2) }));
       let result = false;
       try {
         result = await this.doc.move(waypoints, {
@@ -727,19 +725,44 @@ class Brain {
       } catch (err) {
         console.warn(`${MID} | Bewegung von ${this.doc.name} fehlgeschlagen`, err);
         result = false;
-      } finally {
-        clearInterval(watcher);
       }
-      try { await (this.doc.object?.movementAnimationPromise ?? null); } catch (err) { /* abgebrochen */ }
+      // Während der Animation auf Spielpause/Kampf achten: dann genau dort einfrieren, wo er gerade ist
+      let frozen = false;
+      const anim = this.doc.object?.movementAnimationPromise;
+      if (anim) {
+        let done = false;
+        Promise.resolve(anim).then(() => { done = true; }, () => { done = true; });
+        while (!done) {
+          if (!this.ok(gen)) return false;
+          if (blocked()) { frozen = await this.freezeHere(); break; }
+          await delay(80);
+        }
+      }
       if (!this.ok(gen)) return false;
-      if (!stoppedForPause) return result !== false;
-      // Wegen Pause angehalten: Rest des Weges ab der aktuellen Position merken
-      const here = this.center();
-      let idx = -1, best = Infinity;
-      fine.forEach((p, i) => { const d = dist(p, here); if (d < best) { best = d; idx = i; } });
-      fine = best <= (canvas.grid?.size ?? 100) * 0.25 ? fine.slice(idx + 1) : fine.slice(Math.max(0, idx));
+      if (!frozen) return result !== false;
+      // Eingefroren: Rest des Weges ab der aktuellen Position merken und nach der Pause weiterlaufen
+      remaining = remainingPath([from, ...remaining], this.center());
     }
     return this.ok(gen);
+  }
+
+  /**
+   * Hält den NSC mitten in der Animation genau an der sichtbaren Stelle an.
+   * Kostet eine einzige (leise) Änderung und nur dann, wenn wirklich angehalten wird.
+   */
+  async freezeHere() {
+    const tok = this.doc.object;
+    if (!tok) return false;
+    const x = Math.round(tok.x), y = Math.round(tok.y);
+    if (Math.abs(x - this.doc.x) < 2 && Math.abs(y - this.doc.y) < 2) return false; // läuft gar nicht
+    try { this.doc.stopMovement?.(); } catch (err) { /* egal */ }
+    try {
+      await this.doc.update({ x, y }, { animate: false, render: false, [MID]: { freeze: true } });
+      return true;
+    } catch (err) {
+      console.warn(`${MID} | Anhalten von ${this.doc.name} fehlgeschlagen`, err);
+      return false;
+    }
   }
 
   /** Wartet, bis Spielpause/Kampf/Hauptschalter vorbei sind */
@@ -1435,7 +1458,7 @@ Hooks.once("init", () => {
     name: "Belebung aktiv",
     hint: "Hauptschalter für alle NSC-Verhalten. Auch über den Knopf in der Token-Leiste umschaltbar.",
     type: Boolean, default: true,
-    onChange: (v) => { if (!v) for (const b of brains.values()) b.interrupt(); }
+    onChange: (v) => { if (!v) for (const b of brains.values()) { b.freezeHere(); b.interrupt(); } }
   });
   reg("pauseWithGame", {
     name: "Bei Spielpause anhalten",
@@ -1546,7 +1569,7 @@ for (const hook of ["createDrawing", "updateDrawing", "deleteDrawing"]) {
 }
 
 Hooks.on("combatStart", () => {
-  if (setting("stopInCombat")) for (const b of brains.values()) b.interrupt();
+  if (setting("stopInCombat")) for (const b of brains.values()) { b.freezeHere(); b.interrupt(); }
 });
 
 /* Knopf im Token-HUD (Rechtsklick auf einen Token) */
