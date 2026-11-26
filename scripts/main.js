@@ -1332,6 +1332,73 @@ class BehaviorConfig extends ApplicationV2 {
 /*  Übersicht aller NSCs der Szene                                       */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  Flacker-Diagnose                                                     */
+/* ------------------------------------------------------------------ */
+
+let diagRunning = false;
+
+/**
+ * Misst 20 Sekunden lang, welche Fenster neu gezeichnet werden und welche Dokumente sich ändern.
+ * Hilft herauszufinden, welches Modul Knöpfe/Dropdowns flackern lässt.
+ */
+async function runFlickerDiagnosis(seconds = 20) {
+  if (diagRunning) return;
+  diagRunning = true;
+  const renders = new Map();
+  const updates = new Map();
+  const add = (m, k) => m.set(k, (m.get(k) ?? 0) + 1);
+  const hooks = [];
+  const onRender = (app) => {
+    const id = app?.id ?? "";
+    if (String(id).startsWith(`${MID}-overview`)) return;
+    const title = app?.title || app?.options?.window?.title || id || "?";
+    add(renders, `${title} · ${app?.constructor?.name ?? "?"}`);
+  };
+  hooks.push(["renderApplicationV2", Hooks.on("renderApplicationV2", onRender)]);
+  hooks.push(["renderApplication", Hooks.on("renderApplication", onRender)]);
+  const types = CONST.ALL_DOCUMENT_TYPES ?? CONST.DOCUMENT_TYPES ?? [
+    "Actor", "Item", "ActiveEffect", "JournalEntry", "JournalEntryPage", "Scene", "Token", "Tile", "Wall",
+    "Region", "RegionBehavior", "Drawing", "AmbientLight", "AmbientSound", "Note", "Combat", "Combatant",
+    "ChatMessage", "Folder", "Macro", "Playlist", "PlaylistSound", "RollTable", "TableResult", "User", "Setting"
+  ];
+  for (const t of types) {
+    const h = `update${t}`;
+    hooks.push([h, Hooks.on(h, (doc, changes, options, userId) => {
+      const npc = t === "Token" && brains.has(doc.id);
+      const who = game.users.get(userId)?.name ?? "?";
+      const keys = Object.keys(foundry.utils.flattenObject(changes ?? {})).filter((k) => k !== "_id");
+      const what = keys.length ? keys.slice(0, 3).join(", ") + (keys.length > 3 ? " …" : "") : "–";
+      add(updates, `${t}${npc ? " (NSC)" : ""}: ${doc?.name ?? doc?.id ?? "?"} · ${what} · von ${who}`);
+    })]);
+  }
+  ui.notifications.info(`Flacker-Diagnose läuft ${seconds} Sekunden. Lass die NSCs laufen und das flackernde Fenster offen.`);
+  foundry.applications.instances?.get(`${MID}-overview`)?.render();
+  await delay(seconds * 1000);
+  for (const [h, id] of hooks) Hooks.off(h, id);
+  diagRunning = false;
+  foundry.applications.instances?.get(`${MID}-overview`)?.render();
+
+  const table = (map, empty) => {
+    const rows = [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
+      .map(([k, v]) => `<tr><td>${esc(k)}</td><td style="text-align:right"><strong>${v}×</strong></td></tr>`).join("");
+    return rows ? `<table class="npcb-diag-table">${rows}</table>` : `<p><em>${empty}</em></p>`;
+  };
+  const content = `
+    <p>Gemessen: ${seconds} Sekunden, ${brains.size} NSC(s) aktiv.</p>
+    <h3>Neu gezeichnete Fenster</h3>
+    ${table(renders, "Keine – kein Fenster wurde neu gezeichnet.")}
+    <h3>Geänderte Dokumente</h3>
+    ${table(updates, "Keine Änderungen.")}
+    <p class="npcb-hint">Mach einen Screenshot davon und schick ihn an Claude.</p>`;
+  const DialogV2 = foundry.applications.api.DialogV2;
+  if (DialogV2) {
+    DialogV2.prompt({ window: { title: "Flacker-Diagnose – Ergebnis", resizable: true }, position: { width: 620 }, content, ok: { label: "Schließen" } });
+  } else {
+    ChatMessage.create({ content, whisper: [game.user.id] });
+  }
+}
+
 class BehaviorOverview extends ApplicationV2 {
   static DEFAULT_OPTIONS = {
     id: `${MID}-overview`,
@@ -1343,7 +1410,8 @@ class BehaviorOverview extends ApplicationV2 {
       toggle: BehaviorOverview._onToggle,
       pause: BehaviorOverview._onPause,
       pan: BehaviorOverview._onPan,
-      master: BehaviorOverview._onMaster
+      master: BehaviorOverview._onMaster,
+      diagnose: () => runFlickerDiagnosis()
     }
   };
 
@@ -1380,6 +1448,9 @@ class BehaviorOverview extends ApplicationV2 {
           <span>Belebung in dieser Welt: <strong>${active ? "an" : "aus"}</strong></span>
           <button type="button" data-action="master"><i class="fa-solid ${active ? "fa-stop" : "fa-play"}"></i> ${active ? "Alles anhalten" : "Alles starten"}</button>
         </div>
+        <div class="npcb-diag">
+          <button type="button" data-action="diagnose" ${diagRunning ? "disabled" : ""}><i class="fa-solid fa-stethoscope"></i> ${diagRunning ? "Diagnose läuft …" : "Flacker-Diagnose (20 Sek.)"}</button>
+          <small>Misst, welche Fenster neu gezeichnet werden, während die NSCs laufen.</small></div>
         ${rows ? `<table><tbody>${rows}</tbody></table>` : `<p class="npcb-hint">In dieser Szene hat noch kein NSC ein Verhalten. Rechtsklick auf einen Token → Knopf <i class="fa-solid fa-person-walking"></i>.</p>`}
       </div>`;
   }
@@ -1499,6 +1570,7 @@ Hooks.once("ready", () => {
   });
   game.modules.get(MID).api = {
     openConfig, openOverview,
+    diagnose: (seconds) => runFlickerDiagnosis(seconds),
     pause: (tokenId) => { const d = canvas.scene?.tokens.get(tokenId); return d && setPaused(d, true); },
     resume: (tokenId) => { const d = canvas.scene?.tokens.get(tokenId); return d && setPaused(d, false); },
     say: (tokenId, text) => {
