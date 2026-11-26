@@ -15,6 +15,80 @@ import { POOLS, DEFAULT_PHRASES, parseLines, PhraseBag } from "./phrases.js";
 
 const MID = "ascandir-npc-behavior";
 const SOCKET = `module.${MID}`;
+
+/* ------------------------------------------------------------------ */
+/*  Schutzschild: fremde Module bekommen NSC-Bewegungen nicht mit       */
+/* ------------------------------------------------------------------ */
+/*
+ * Manche Module (z. B. Gatherer) prüfen bei JEDEM Animationsbild jedes Tokens etwas und schalten
+ * dabei Knöpfe um. Laufen NSCs, flackern diese Knöpfe. Für die hier eingetragenen Module werden die
+ * Token-Ereignisse von laufenden NSCs einfach nicht weitergereicht – NSCs sammeln/craften ja nicht.
+ * Muss sehr früh passieren, bevor die anderen Module ihre Hooks anmelden.
+ */
+const SHIELD_HOOKS = new Set(["refreshToken", "updateToken", "moveToken"]);
+let shieldModules = new Set(["gatherer"]);
+const shieldCounts = new Map();          // Modul → Anzahl ausgeblendeter NSC-Ereignisse
+const tokenListeners = new Map();        // Modul → Set(Hook), wer hört auf Token-Bewegungen
+const shieldWrapped = new WeakMap();     // Original-Funktion → Hülle
+
+// Module, die sich nur zwischen die Hooks schalten (messen/verpacken) – nie der eigentliche Absender
+const HOOK_INFRA = new Set([MID, "ascandir-performance-analyst", "lib-wrapper"]);
+
+function hookCaller() {
+  let stack = "";
+  const old = Error.stackTraceLimit;
+  try { Error.stackTraceLimit = 40; stack = new Error().stack ?? ""; } catch (err) { /* egal */ }
+  try { Error.stackTraceLimit = old; } catch (err) { /* egal */ }
+  for (const line of stack.split("\n")) {
+    if (line.includes("__apa")) continue;
+    const m = line.match(/\/modules\/([^/?#]+)\//);
+    if (m && !HOOK_INFRA.has(m[1])) return m[1];
+  }
+  return null;
+}
+
+/** Läuft für diesen Token gerade ein NSC-Verhalten? (funktioniert auch bei Spielern) */
+function isActiveNpcToken(obj) {
+  const doc = obj?.document ?? obj;
+  const f = doc?.flags?.[MID];
+  return !!f?.config?.enabled && !f.paused;
+}
+
+(function installHookShield() {
+  try {
+    const origOn = Hooks.on;
+    const origOff = Hooks.off;
+    Hooks.on = function (hook, fn, options) {
+      if (SHIELD_HOOKS.has(hook) && typeof fn === "function") {
+        const mod = hookCaller();
+        if (mod) {
+          if (!tokenListeners.has(mod)) tokenListeners.set(mod, new Set());
+          tokenListeners.get(mod).add(hook);
+          const wrapped = function (first, ...rest) {
+            if (shieldModules.has(mod) && isActiveNpcToken(first)) {
+              shieldCounts.set(mod, (shieldCounts.get(mod) ?? 0) + 1);
+              return;
+            }
+            return fn.call(this, first, ...rest);
+          };
+          shieldWrapped.set(fn, wrapped);
+          return origOn.call(this, hook, wrapped, options);
+        }
+      }
+      return origOn.call(this, hook, fn, options);
+    };
+    Hooks.off = function (hook, fn) {
+      const w = typeof fn === "function" ? shieldWrapped.get(fn) : null;
+      return origOff.call(this, hook, w ?? fn);
+    };
+  } catch (err) {
+    console.warn(`${MID} | Schutzschild konnte nicht eingerichtet werden`, err);
+  }
+})();
+
+function readShieldSetting(value) {
+  shieldModules = new Set(String(value ?? "").split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
 const { ApplicationV2 } = foundry.applications.api;
 
 /* ------------------------------------------------------------------ */
@@ -1372,6 +1446,7 @@ async function runFlickerDiagnosis(seconds = 20) {
       add(updates, `${t}${npc ? " (NSC)" : ""}: ${doc?.name ?? doc?.id ?? "?"} · ${what} · von ${who}`);
     })]);
   }
+  const shieldBefore = new Map(shieldCounts);
   ui.notifications.info(`Flacker-Diagnose läuft ${seconds} Sekunden. Lass die NSCs laufen und das flackernde Fenster offen.`);
   foundry.applications.instances?.get(`${MID}-overview`)?.render();
   await delay(seconds * 1000);
@@ -1384,10 +1459,21 @@ async function runFlickerDiagnosis(seconds = 20) {
       .map(([k, v]) => `<tr><td>${esc(k)}</td><td style="text-align:right"><strong>${v}×</strong></td></tr>`).join("");
     return rows ? `<table class="npcb-diag-table">${rows}</table>` : `<p><em>${empty}</em></p>`;
   };
+  const listenerTable = (before) => {
+    const rows = [...tokenListeners.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([mod, hooksSet]) => {
+      const title = game.modules.get(mod)?.title ?? mod;
+      const blocked = (shieldCounts.get(mod) ?? 0) - (before.get(mod) ?? 0);
+      const state = shieldModules.has(mod) ? `🛡️ ignoriert NSCs (${blocked}× ausgeblendet)` : "";
+      return `<tr><td>${esc(title)} <small>(${esc(mod)})</small></td><td>${esc([...hooksSet].join(", "))}</td><td>${state}</td></tr>`;
+    }).join("");
+    return rows ? `<table class="npcb-diag-table">${rows}</table>` : "<p><em>Keine gefunden.</em></p>";
+  };
   const content = `
     <p>Gemessen: ${seconds} Sekunden, ${brains.size} NSC(s) aktiv.</p>
     <h3>Neu gezeichnete Fenster</h3>
     ${table(renders, "Keine – kein Fenster wurde neu gezeichnet.")}
+    <h3>Module, die auf jede Token-Bewegung hören</h3>
+    ${listenerTable(shieldBefore)}
     <h3>Geänderte Dokumente</h3>
     ${table(updates, "Keine Änderungen.")}
     <p class="npcb-hint">Mach einen Screenshot davon und schick ihn an Claude.</p>`;
@@ -1547,6 +1633,12 @@ Hooks.once("init", () => {
     type: Boolean, default: false,
     onChange: () => { for (const id of [...brains.keys()]) restartBrain(id); }
   });
+  reg("shieldModules", {
+    name: "Module, die NSC-Bewegungen ignorieren sollen",
+    hint: "Modul-IDs, durch Komma getrennt (Standard: gatherer). Diese Module bekommen nicht mit, wenn laufende NSCs sich bewegen – hilft gegen flackernde Knöpfe. Welche Module auf Token-Bewegungen hören, zeigt die Flacker-Diagnose in der NSC-Übersicht. Neu laden nötig.",
+    type: String, default: "gatherer",
+    requiresReload: true
+  });
   reg("debugPaths", {
     name: "Geplante Wege anzeigen (nur SL)",
     hint: "Zeichnet den geplanten Weg jedes NSC als orange Linie (Türdurchgänge blau). Hilfreich beim Einrichten.",
@@ -1565,6 +1657,7 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", () => {
+  readShieldSetting(setting("shieldModules"));
   game.socket.on(SOCKET, (data) => {
     if (data?.action === "bubble" && data.sceneId === canvas.scene?.id) showBubble(data.tokenId, data.text);
   });
