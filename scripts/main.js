@@ -172,6 +172,12 @@ function drawLine(doc, cfg, pool) {
 /* ------------------------------------------------------------------ */
 
 const brains = new Map();
+
+/**
+ * Automatische Änderungen der NSCs (Schritte, Türen, Flags) sollen im Hintergrund laufen:
+ * Foundry soll dafür keine offenen Fenster (Szenen-Einstellungen, Token-Bögen …) neu zeichnen.
+ */
+const QUIET = { render: false };
 const BLOCKED = "blocked";
 const DOOR_BLOCKED = "door-blocked";
 
@@ -242,7 +248,7 @@ class Brain {
       // Tot/bewusstlos: dauerhaft pausieren – nach dem Heilen setzt der SL selbst fort
       if (isDown(this.doc) && !isPaused(this.doc) && !this._pausing) {
         this._pausing = true;
-        this.doc.update({ [`flags.${MID}.paused`]: true }).finally(() => { this._pausing = false; });
+        this.doc.update({ [`flags.${MID}.paused`]: true }, QUIET).finally(() => { this._pausing = false; });
       }
       const h = this.halted();
       if (h && !this._wasHalted) {
@@ -610,9 +616,9 @@ class Brain {
     if (off === flagged) return;
     if (off) {
       if (!this.cfg.hideOffmap || this.doc.hidden) return; // vom SL versteckte Token nicht anfassen
-      await this.doc.update({ hidden: true, [`flags.${MID}.offmap`]: true });
+      await this.doc.update({ hidden: true, [`flags.${MID}.offmap`]: true }, QUIET);
     } else {
-      await this.doc.update({ hidden: false, [`flags.${MID}.offmap`]: false });
+      await this.doc.update({ hidden: false, [`flags.${MID}.offmap`]: false }, QUIET);
     }
   }
 
@@ -689,7 +695,8 @@ class Brain {
           showRuler: false,
           pan: false,
           animation: { movementSpeed: Math.max(0.5, num(this.cfg.speed, 3)) },
-          constrainOptions: { ignoreWalls: true, ignoreCost: true }
+          constrainOptions: { ignoreWalls: true, ignoreCost: true },
+          render: false
         });
       } catch (err) {
         console.warn(`${MID} | Bewegung von ${this.doc.name} fehlgeschlagen`, err);
@@ -912,7 +919,7 @@ async function openDoors(walls) {
   for (const w of walls) {
     if (!w || w.ds === OPEN) continue;
     try {
-      await w.update({ ds: OPEN });
+      await w.update({ ds: OPEN }, QUIET);
       opened.push(w);
     } catch (err) {
       console.warn(`${MID} | Tür konnte nicht geöffnet werden`, err);
@@ -935,7 +942,7 @@ async function closeDoorsNow(walls, selfDoc) {
   const CLOSED = CONST.WALL_DOOR_STATES?.CLOSED ?? 0;
   for (const w of walls) {
     if (someoneInDoorway(w, selfDoc)) { closeDoorLater(w, selfDoc); continue; }
-    try { await w.update({ ds: CLOSED }); } catch (err) { /* egal */ }
+    try { await w.update({ ds: CLOSED }, QUIET); } catch (err) { /* egal */ }
   }
 }
 
@@ -967,7 +974,7 @@ function closeDoorLater(wall, selfDoc) {
       const someoneThere = canvas.tokens?.placeables.some((t) => t.document !== selfDoc && dist(t.center, mid) < range)
         || (selfDoc?.object && dist(selfDoc.object.center, mid) < selfRange);
       if (!someoneThere) {
-        try { await wall.update({ ds: CLOSED }); } catch (err) { /* egal */ }
+        try { await wall.update({ ds: CLOSED }, QUIET); } catch (err) { /* egal */ }
         return;
       }
       await delay(500);
@@ -1325,11 +1332,20 @@ class BehaviorOverview extends ApplicationV2 {
       </div>`;
   }
 
-  _replaceHTML(result, content) { content.innerHTML = result; }
+  _replaceHTML(result, content) { content.innerHTML = result; this._lastHTML = result; }
 
   _onRender(context, options) {
     super._onRender?.(context, options);
-    if (!this._timer) this._timer = setInterval(() => { if (this.rendered) this.render(); }, 2000);
+    this._lastHTML ??= this.element?.querySelector(".window-content")?.innerHTML ?? null;
+    if (!this._timer) this._timer = setInterval(async () => {
+      if (!this.rendered) return;
+      // Nur neu zeichnen, wenn sich Status oder Liste geändert haben – sonst flackert nichts
+      const html = await this._renderHTML();
+      if (html !== this._lastHTML) {
+        this._lastHTML = html;
+        this.render();
+      }
+    }, 2000);
   }
 
   async close(options) {
@@ -1453,6 +1469,13 @@ Hooks.on("canvasReady", () => {
 Hooks.on("createToken", () => syncBrains());
 Hooks.on("deleteToken", () => syncBrains());
 Hooks.on("userConnected", () => setTimeout(syncBrains, 500));
+
+/* Bewegungen laufender NSCs zeichnen keine Fenster neu (auch falls move() die Option nicht durchreicht) */
+Hooks.on("preUpdateToken", (doc, changes, options) => {
+  if (!brains.has(doc.id)) return;
+  const method = options?.movement?.[doc.id]?.method;
+  if (method === "api" || options?.render === false) options.render = false;
+});
 
 Hooks.on("updateToken", (doc, changes, options) => {
   if (doc.parent !== canvas.scene) return;

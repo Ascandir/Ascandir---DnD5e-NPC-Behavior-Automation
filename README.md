@@ -99,5 +99,6 @@ Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel finde
 
 ## Gut zu wissen
 
+- Die NSCs laufen **im Hintergrund**: Ihre Schritte und Türen zeichnen keine offenen Fenster neu. Du kannst also Szene, Token oder Wände bearbeiten, während sie unterwegs sind – nichts flackert oder klappt zu.
 - Gesteuert wird alles vom **SL-Client**. Die NSCs laufen nur in der Szene, die der SL gerade offen hat, und nur solange ein SL eingeloggt ist.
 - Die Einstellungen hängen am **Token in der Szene**, nicht am Actor. Kopierst du den Token, kopierst du das Verhalten mit.
