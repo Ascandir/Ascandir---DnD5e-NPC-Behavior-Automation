@@ -1613,11 +1613,21 @@ async function runFlickerDiagnosis(seconds = 20) {
     <h3>Geänderte Dokumente</h3>
     ${table(updates, "Keine Änderungen.")}
     <p class="npcb-hint">Mach einen Screenshot davon und schick ihn an Claude.</p>`;
+  // Immer auch als Flüsternachricht in den Chat – dort lässt sich alles in Ruhe lesen
+  try {
+    await ChatMessage.create({ content: `<div class="npcb-diag-chat"><h2>Flacker-Diagnose</h2>${content}</div>`, whisper: [game.user.id] });
+  } catch (err) {
+    console.warn(`${MID} | Diagnose konnte nicht in den Chat geschrieben werden`, err);
+  }
   const DialogV2 = foundry.applications.api.DialogV2;
   if (DialogV2) {
-    DialogV2.prompt({ window: { title: "Flacker-Diagnose – Ergebnis", resizable: true }, position: { width: 620 }, content, ok: { label: "Schließen" } });
-  } else {
-    ChatMessage.create({ content, whisper: [game.user.id] });
+    DialogV2.prompt({
+      window: { title: "Flacker-Diagnose – Ergebnis", resizable: true },
+      position: { width: 680, height: Math.min(760, Math.round(window.innerHeight * 0.85)) },
+      classes: ["npcb-diag-dialog"],
+      content: `<div class="npcb-diag-scroll">${content}<p class="npcb-hint">Das Ergebnis steht auch als Flüsternachricht im Chat.</p></div>`,
+      ok: { label: "Schließen" }
+    });
   }
 }
 

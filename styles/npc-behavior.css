@@ -211,3 +211,22 @@
   border-bottom: 1px solid #7a797133;
   word-break: break-word;
 }
+
+/* Diagnose-Ergebnis: scrollbar statt abgeschnitten */
+.npcb-diag-dialog .window-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.npcb-diag-dialog .npcb-diag-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 0.4rem;
+}
+
+.npcb-diag-chat .npcb-diag-table {
+  font-size: 0.8em;
+}
