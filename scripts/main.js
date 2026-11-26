@@ -34,6 +34,22 @@ const shieldWrapped = new WeakMap();     // Original-Funktion → Hülle
 // Module, die sich nur zwischen die Hooks schalten (messen/verpacken) – nie der eigentliche Absender
 const HOOK_INFRA = new Set([MID, "ascandir-performance-analyst", "lib-wrapper"]);
 
+/** Wer hat den aktuellen Code aufgerufen? Modul-ID, "System …" oder "Foundry" */
+function codeOwner() {
+  let stack = "";
+  const old = Error.stackTraceLimit;
+  try { Error.stackTraceLimit = 40; stack = new Error().stack ?? ""; } catch (err) { /* egal */ }
+  try { Error.stackTraceLimit = old; } catch (err) { /* egal */ }
+  for (const line of stack.split("\n")) {
+    if (line.includes("__apa") || line.includes("npcbDiag")) continue;
+    const m = line.match(/\/modules\/([^/?#]+)\//);
+    if (m && !HOOK_INFRA.has(m[1])) return m[1];
+    const sys = line.match(/\/systems\/([^/?#]+)\//);
+    if (sys) return `System ${sys[1]}`;
+  }
+  return "Foundry";
+}
+
 function hookCaller() {
   let stack = "";
   const old = Error.stackTraceLimit;
@@ -1413,6 +1429,115 @@ class BehaviorConfig extends ApplicationV2 {
 let diagRunning = false;
 
 /**
+ * Beobachtet während der Diagnose, was sich in offenen Fenstern ändert (und welches Modul es ändert),
+ * und ob sich etwas über den Mauszeiger schiebt. Alles wird beim Beenden wieder zurückgesetzt.
+ */
+function startDomWatch() {
+  const changes = new Map();
+  const covers = new Map();
+  const add = (m, k) => m.set(k, (m.get(k) ?? 0) + 1);
+  const winOf = (el) => el?.closest?.(".application, .app, .window-app") ?? null;
+  const ours = (w) => String(w?.id ?? "").startsWith(MID);
+  const winTitle = (w) => (w.querySelector(".window-title")?.textContent ?? w.id ?? "Fenster").trim().slice(0, 40);
+  const describe = (el) => {
+    if (!el?.tagName) return "?";
+    let d = el.tagName.toLowerCase();
+    if (el.id) d += `#${el.id}`;
+    const act = el.dataset?.action;
+    if (act) d += `[${act}]`;
+    const cls = [...(el.classList ?? [])].slice(0, 2);
+    if (cls.length) d += "." + cls.join(".");
+    const txt = (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 24);
+    if (txt && ["button", "a", "option", "label"].includes(el.tagName.toLowerCase())) d += ` „${txt}“`;
+    return d;
+  };
+  const record = (el, what) => {
+    const w = winOf(el);
+    if (!w || ours(w)) return;
+    add(changes, `${codeOwner()} → ${winTitle(w)} → ${describe(el)} · ${what}`);
+  };
+
+  // 1) Gängige DOM-Methoden kurz verpacken, um den Verursacher zu erkennen
+  const restores = [];
+  const wrapMethod = (proto, name, what) => {
+    const orig = proto?.[name];
+    if (typeof orig !== "function") return;
+    proto[name] = function npcbDiag(...args) {
+      try { record(this.nodeType === 1 ? this : this.parentElement, typeof what === "function" ? what(args) : what); } catch (e) { /* egal */ }
+      return orig.apply(this, args);
+    };
+    restores.push(() => { proto[name] = orig; });
+  };
+  const wrapSetter = (proto, prop, what) => {
+    const desc = proto && Object.getOwnPropertyDescriptor(proto, prop);
+    if (!desc?.set) return;
+    Object.defineProperty(proto, prop, {
+      ...desc,
+      set: function npcbDiag(v) {
+        try { record(this, typeof what === "function" ? what(v) : what); } catch (e) { /* egal */ }
+        return desc.set.call(this, v);
+      }
+    });
+    restores.push(() => Object.defineProperty(proto, prop, desc));
+  };
+  wrapMethod(Element.prototype, "setAttribute", (a) => `Attribut ${a[0]}`);
+  wrapMethod(Element.prototype, "removeAttribute", (a) => `Attribut ${a[0]} entfernt`);
+  wrapMethod(Element.prototype, "toggleAttribute", (a) => `Attribut ${a[0]} umgeschaltet`);
+  wrapMethod(Element.prototype, "replaceWith", "durch neues Element ersetzt");
+  wrapMethod(Element.prototype, "replaceChildren", "Inhalt ersetzt");
+  wrapMethod(Element.prototype, "insertAdjacentHTML", "HTML eingefügt");
+  wrapMethod(Node.prototype, "appendChild", "Element angehängt");
+  wrapMethod(Node.prototype, "insertBefore", "Element eingefügt");
+  wrapMethod(Node.prototype, "removeChild", "Element entfernt");
+  wrapMethod(Node.prototype, "replaceChild", "Element ersetzt");
+  wrapSetter(Element.prototype, "innerHTML", "Inhalt neu geschrieben (innerHTML)");
+  wrapSetter(Element.prototype, "outerHTML", "neu geschrieben (outerHTML)");
+  wrapSetter(Node.prototype, "textContent", "Text gesetzt");
+  for (const C of [globalThis.HTMLButtonElement, globalThis.HTMLInputElement, globalThis.HTMLSelectElement]) {
+    wrapSetter(C?.prototype, "disabled", (v) => (v ? "deaktiviert" : "aktiviert"));
+  }
+  wrapSetter(HTMLElement.prototype, "hidden", (v) => (v ? "versteckt" : "gezeigt"));
+
+  // 2) Alles, was sich ändert (auch Klassen/Style, die man nicht verpacken kann)
+  const observer = new MutationObserver((list) => {
+    for (const m of list) {
+      const el = m.target?.nodeType === 1 ? m.target : m.target?.parentElement;
+      const w = winOf(el);
+      if (!w || ours(w)) continue;
+      const what = m.type === "attributes" ? `Attribut ${m.attributeName} (beobachtet)`
+        : m.type === "childList" ? "Inhalt geändert (beobachtet)" : "Text geändert (beobachtet)";
+      add(changes, `? → ${winTitle(w)} → ${describe(el)} · ${what}`);
+    }
+  });
+  observer.observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
+
+  // 3) Liegt etwas anderes über dem Fenster unter dem Mauszeiger?
+  let mouse = null;
+  const onMove = (e) => { mouse = { x: e.clientX, y: e.clientY }; };
+  document.addEventListener("pointermove", onMove, true);
+  const coverTimer = setInterval(() => {
+    if (!mouse) return;
+    const under = document.elementFromPoint(mouse.x, mouse.y);
+    for (const w of document.querySelectorAll(".application, .app, .window-app")) {
+      if (ours(w)) continue;
+      const r = w.getBoundingClientRect();
+      if (mouse.x < r.left || mouse.x > r.right || mouse.y < r.top || mouse.y > r.bottom) continue;
+      if (under && under !== document.body && under !== document.documentElement && !w.contains(under) && !winOf(under)) add(covers, `${winTitle(w)} verdeckt von ${describe(under)}`);
+    }
+  }, 100);
+
+  return {
+    changes, covers,
+    stop() {
+      observer.disconnect();
+      clearInterval(coverTimer);
+      document.removeEventListener("pointermove", onMove, true);
+      for (const r of restores.reverse()) { try { r(); } catch (e) { /* egal */ } }
+    }
+  };
+}
+
+/**
  * Misst 20 Sekunden lang, welche Fenster neu gezeichnet werden und welche Dokumente sich ändern.
  * Hilft herauszufinden, welches Modul Knöpfe/Dropdowns flackern lässt.
  */
@@ -1449,7 +1574,12 @@ async function runFlickerDiagnosis(seconds = 20) {
   const shieldBefore = new Map(shieldCounts);
   ui.notifications.info(`Flacker-Diagnose läuft ${seconds} Sekunden. Lass die NSCs laufen und das flackernde Fenster offen.`);
   foundry.applications.instances?.get(`${MID}-overview`)?.render();
-  await delay(seconds * 1000);
+  const domWatch = startDomWatch();
+  try {
+    await delay(seconds * 1000);
+  } finally {
+    domWatch.stop();
+  }
   for (const [h, id] of hooks) Hooks.off(h, id);
   diagRunning = false;
   foundry.applications.instances?.get(`${MID}-overview`)?.render();
@@ -1470,6 +1600,12 @@ async function runFlickerDiagnosis(seconds = 20) {
   };
   const content = `
     <p>Gemessen: ${seconds} Sekunden, ${brains.size} NSC(s) aktiv.</p>
+    <h3>Änderungen an Knöpfen &amp; Feldern in offenen Fenstern</h3>
+    <p class="npcb-hint">Modul → Fenster → Element · was geändert wurde</p>
+    ${table(domWatch.changes, "Keine – in den Fenstern hat sich nichts verändert.")}
+    <h3>Mauszeiger verdeckt</h3>
+    <p class="npcb-hint">Lag etwas anderes über dem Fenster, während die Maus darauf war?</p>
+    ${table(domWatch.covers, "Nein – nichts hat sich über das Fenster geschoben.")}
     <h3>Neu gezeichnete Fenster</h3>
     ${table(renders, "Keine – kein Fenster wurde neu gezeichnet.")}
     <h3>Module, die auf jede Token-Bewegung hören</h3>
