@@ -26,7 +26,7 @@ const SOCKET = `module.${MID}`;
  * Muss sehr früh passieren, bevor die anderen Module ihre Hooks anmelden.
  */
 const SHIELD_HOOKS = new Set(["refreshToken", "updateToken", "moveToken"]);
-let shieldModules = new Set(["gatherer"]);
+let shieldModules = new Set(["gatherer", "mastercrafted"]);
 const shieldCounts = new Map();          // Modul → Anzahl ausgeblendeter NSC-Ereignisse
 const tokenListeners = new Map();        // Modul → Set(Hook), wer hört auf Token-Bewegungen
 const shieldWrapped = new WeakMap();     // Original-Funktion → Hülle
@@ -1635,8 +1635,8 @@ Hooks.once("init", () => {
   });
   reg("shieldModules", {
     name: "Module, die NSC-Bewegungen ignorieren sollen",
-    hint: "Modul-IDs, durch Komma getrennt (Standard: gatherer). Diese Module bekommen nicht mit, wenn laufende NSCs sich bewegen – hilft gegen flackernde Knöpfe. Welche Module auf Token-Bewegungen hören, zeigt die Flacker-Diagnose in der NSC-Übersicht. Neu laden nötig.",
-    type: String, default: "gatherer",
+    hint: "Modul-IDs, durch Komma getrennt (Standard: gatherer, mastercrafted). Diese Module bekommen nicht mit, wenn laufende NSCs sich bewegen – hilft gegen flackernde Knöpfe. Welche Module auf Token-Bewegungen hören, zeigt die Flacker-Diagnose in der NSC-Übersicht. Neu laden nötig.",
+    type: String, default: "gatherer, mastercrafted",
     requiresReload: true
   });
   reg("debugPaths", {
