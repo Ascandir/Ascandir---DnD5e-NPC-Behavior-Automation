@@ -63,11 +63,15 @@ function hookCaller() {
   return null;
 }
 
-/** Läuft für diesen Token gerade ein NSC-Verhalten? (funktioniert auch bei Spielern) */
-function isActiveNpcToken(obj) {
+/**
+ * Gehört dieser Token KEINEM Spieler (NSC, Monster, Deko)? Solche Token werden für die
+ * abgeschirmten Module ausgeblendet – sie sehen nur noch die Token der Spieler.
+ */
+function isNonPlayerToken(obj) {
   const doc = obj?.document ?? obj;
-  const f = doc?.flags?.[MID];
-  return !!f?.config?.enabled && !f.paused;
+  if (!doc || (doc.documentName ?? doc.constructor?.documentName) !== "Token") return false;
+  const owned = doc.actor?.hasPlayerOwner ?? doc.hasPlayerOwner ?? false;
+  return !owned;
 }
 
 (function installHookShield() {
@@ -81,7 +85,7 @@ function isActiveNpcToken(obj) {
           if (!tokenListeners.has(mod)) tokenListeners.set(mod, new Set());
           tokenListeners.get(mod).add(hook);
           const wrapped = function (first, ...rest) {
-            if (shieldModules.has(mod) && isActiveNpcToken(first)) {
+            if (shieldModules.has(mod) && isNonPlayerToken(first)) {
               shieldCounts.set(mod, (shieldCounts.get(mod) ?? 0) + 1);
               return;
             }
@@ -101,6 +105,46 @@ function isActiveNpcToken(obj) {
     console.warn(`${MID} | Schutzschild konnte nicht eingerichtet werden`, err);
   }
 })();
+
+/**
+ * Zweiter Weg: Regionen-Verhalten (z. B. die von Gatherer) bekommen "Token betritt/verlässt Region"
+ * direkt von Foundry gemeldet, ohne Hooks. Für abgeschirmte Module werden Meldungen zu Token ohne
+ * Spieler-Besitzer verworfen.
+ */
+function installRegionShield() {
+  const blockEvent = (behaviorType, event) => {
+    const mod = String(behaviorType ?? "").split(".")[0];
+    if (!mod || !shieldModules.has(mod)) return false;
+    const token = event?.data?.token;
+    if (!token || !isNonPlayerToken(token)) return false;
+    shieldCounts.set(mod, (shieldCounts.get(mod) ?? 0) + 1);
+    return true;
+  };
+  const patch = (proto, getType, label) => {
+    const orig = proto?._handleRegionEvent;
+    if (typeof orig !== "function" || orig.__npcbShield) return false;
+    const wrapped = function (event, ...rest) {
+      try { if (blockEvent(getType(this), event)) return Promise.resolve(); } catch (err) { /* egal */ }
+      return orig.call(this, event, ...rest);
+    };
+    wrapped.__npcbShield = true;
+    proto._handleRegionEvent = wrapped;
+    console.log(`${MID} | Regionen-Schutz aktiv (${label})`);
+    return true;
+  };
+  try {
+    // a) Auf Ebene des Regionen-Verhaltens (Dokument)
+    patch(CONFIG.RegionBehavior?.documentClass?.prototype, (b) => b.type, "RegionBehavior");
+    // b) Zusätzlich direkt in den Verhaltens-Typen der abgeschirmten Module
+    for (const [type, model] of Object.entries(CONFIG.RegionBehavior?.dataModels ?? {})) {
+      const mod = type.split(".")[0];
+      if (!shieldModules.has(mod)) continue;
+      patch(model?.prototype, () => type, type);
+    }
+  } catch (err) {
+    console.warn(`${MID} | Regionen-Schutz konnte nicht eingerichtet werden`, err);
+  }
+}
 
 function readShieldSetting(value) {
   shieldModules = new Set(String(value ?? "").split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
@@ -1593,7 +1637,7 @@ async function runFlickerDiagnosis(seconds = 20) {
     const rows = [...tokenListeners.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([mod, hooksSet]) => {
       const title = game.modules.get(mod)?.title ?? mod;
       const blocked = (shieldCounts.get(mod) ?? 0) - (before.get(mod) ?? 0);
-      const state = shieldModules.has(mod) ? `🛡️ ignoriert NSCs (${blocked}× ausgeblendet)` : "";
+      const state = shieldModules.has(mod) ? `🛡️ sieht nur Spieler-Token (${blocked}× ausgeblendet)` : "";
       return `<tr><td>${esc(title)} <small>(${esc(mod)})</small></td><td>${esc([...hooksSet].join(", "))}</td><td>${state}</td></tr>`;
     }).join("");
     return rows ? `<table class="npcb-diag-table">${rows}</table>` : "<p><em>Keine gefunden.</em></p>";
@@ -1781,7 +1825,7 @@ Hooks.once("init", () => {
   });
   reg("shieldModules", {
     name: "Module, die NSC-Bewegungen ignorieren sollen",
-    hint: "Modul-IDs, durch Komma getrennt (Standard: gatherer, mastercrafted). Diese Module bekommen nicht mit, wenn laufende NSCs sich bewegen – hilft gegen flackernde Knöpfe. Welche Module auf Token-Bewegungen hören, zeigt die Flacker-Diagnose in der NSC-Übersicht. Neu laden nötig.",
+    hint: "Modul-IDs, durch Komma getrennt (Standard: gatherer, mastercrafted). Diese Module sehen nur noch Token, die einem Spieler gehören – Bewegungen von NSCs, Monstern usw. bekommen sie weder über Hooks noch über ihre Regionen-Verhalten mit. Hilft gegen flackernde Knöpfe. Welche Module auf Token-Bewegungen hören, zeigt die Flacker-Diagnose in der NSC-Übersicht. Neu laden nötig.",
     type: String, default: "gatherer, mastercrafted",
     requiresReload: true
   });
@@ -1804,6 +1848,7 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   readShieldSetting(setting("shieldModules"));
+  installRegionShield();
   game.socket.on(SOCKET, (data) => {
     if (data?.action === "bubble" && data.sceneId === canvas.scene?.id) showBubble(data.tokenId, data.text);
   });
