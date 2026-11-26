@@ -95,6 +95,29 @@ function isDown(doc) {
 /** Hat der SL diesen NSC pausiert? */
 const isPaused = (doc) => !!doc?.getFlag?.(MID, "paused");
 
+/* Andere Module, mit denen dieses Modul zusammenarbeitet */
+const MOUNTING = "ascandir-mounting";
+const STEALTH = "ascandir-stealth-vision";
+
+/**
+ * Zustände, in denen ein NSC nicht laufen kann (z. B. gesetzt von Automated Conditions 5e).
+ * Anders als bei Tod wird nicht dauerhaft pausiert: Ist der Zustand weg, läuft er von selbst weiter.
+ */
+const HOLD_STATUSES = ["incapacitated", "paralyzed", "petrified", "stunned", "restrained", "grappled", "sleeping"];
+
+function holdingStatus(doc) {
+  const st = doc?.actor?.statuses;
+  if (!st?.has) return null;
+  const id = HOLD_STATUSES.find((s) => st.has(s));
+  if (!id) return null;
+  const effect = globalThis.CONFIG?.statusEffects?.find?.((e) => e.id === id);
+  const name = effect?.name ?? effect?.label ?? id;
+  return game.i18n?.localize?.(name) ?? name;
+}
+
+/** Ist dieser Token ein Reittier, auf dem gerade jemand sitzt (Ascandir - Mounting)? */
+const isRiddenMount = (doc) => !!doc?.flags?.[MOUNTING]?.riddenBy;
+
 async function setPaused(doc, paused) {
   // Tote/bewusstlose NSCs lassen sich nicht fortsetzen – erst heilen
   if (!paused && isDown(doc)) {
@@ -223,6 +246,9 @@ class Brain {
   halted() {
     if (isDown(this.doc)) return "pausiert – tot oder bewusstlos";
     if (isPaused(this.doc)) return "pausiert (SL)";
+    if (isRiddenMount(this.doc)) return "wird geritten – läuft mit dem Reiter";
+    const cond = holdingStatus(this.doc);
+    if (cond) return `steht still – ${cond}`;
     return null;
   }
 
@@ -1306,9 +1332,12 @@ class BehaviorOverview extends ApplicationV2 {
       const b = brains.get(d.id);
       const down = isDown(d);
       const paused = isPaused(d) || down;
+      const cond = holdingStatus(d);
       const status = !c.enabled ? "aus"
         : down ? "pausiert – tot oder bewusstlos"
         : paused ? "pausiert (SL)"
+        : isRiddenMount(d) ? "wird geritten – läuft mit dem Reiter"
+        : cond ? `steht still – ${cond}`
         : !isLeader() ? "läuft beim aktiven SL" : b?.status ?? "startet …";
       return `
         <tr>
@@ -1472,9 +1501,18 @@ Hooks.on("userConnected", () => setTimeout(syncBrains, 500));
 
 /* Bewegungen laufender NSCs zeichnen keine Fenster neu (auch falls move() die Option nicht durchreicht) */
 Hooks.on("preUpdateToken", (doc, changes, options) => {
+  // Mounting: Das unsichtbare Reittier läuft bei jedem Schritt eines reitenden NSC mit
+  if (options?.[MOUNTING]?.follow) {
+    const riderId = doc.flags?.[MOUNTING]?.riddenBy;
+    if (riderId && brains.has(riderId)) options.render = false;
+    return;
+  }
   if (!brains.has(doc.id)) return;
   const method = options?.movement?.[doc.id]?.method;
-  if (method === "api" || options?.render === false) options.render = false;
+  if (method === "api" || options?.render === false) { options.render = false; return; }
+  // Stealth n Vision speichert nach jedem Stehenbleiben die Blickrichtung des Sichtkegels
+  const keys = Object.keys(foundry.utils.flattenObject(changes ?? {})).filter((k) => k !== "_id");
+  if (keys.length && keys.every((k) => k.startsWith(`flags.${STEALTH}.facing`))) options.render = false;
 });
 
 Hooks.on("updateToken", (doc, changes, options) => {
@@ -1521,6 +1559,7 @@ Hooks.on("renderTokenHUD", (hud, html) => {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "control-icon npcb-hud";
+  btn.dataset.npcbButton = "config"; // feste Kennung, damit Token HUD Folders den Knopf wiedererkennt
   if (getConfig(doc).enabled) btn.classList.add("active");
   btn.title = "NSC-Verhalten";
   btn.innerHTML = `<i class="fa-solid fa-person-walking"></i>`;
@@ -1537,6 +1576,7 @@ Hooks.on("renderTokenHUD", (hud, html) => {
     const pbtn = document.createElement("button");
     pbtn.type = "button";
     pbtn.className = "control-icon npcb-hud-pause" + (paused ? " active" : "") + (down ? " npcb-disabled" : "");
+    pbtn.dataset.npcbButton = "pause"; // gleiche Kennung bei Pause und Fortsetzen
     pbtn.title = down ? "Tot oder bewusstlos – erst heilen, dann fortsetzen"
       : paused ? "NSC-Verhalten fortsetzen" : "NSC-Verhalten pausieren";
     pbtn.innerHTML = `<i class="fa-solid ${paused ? "fa-play" : "fa-pause"}"></i>`;

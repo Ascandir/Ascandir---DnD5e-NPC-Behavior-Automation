@@ -97,6 +97,18 @@ Der NSC benutzt die Wege dann wie Gänge. Bis zum Weg und vom Weg zum Ziel finde
 | NSCs benutzen Geheimtüren | aus |
 | Geplante Wege anzeigen (nur SL) | aus – zeigt den geplanten Weg als orange Linie, Türdurchgänge blau |
 
+## Zusammenspiel mit anderen Modulen
+
+| Modul | Was passiert |
+|---|---|
+| **Ascandir - DnD5e Stealth n Vision** | Sichtkegel drehen sich beim Laufen mit. Bemerkt eine Wache jemanden, hält Stealth n Vision ihre Patrouille an (dort einstellbar). Das Speichern der Blickrichtung zeichnet keine Fenster neu. |
+| **Ascandir - DnD5e Mounting** | Ein NSC darf reiten: Das unsichtbare Reittier läuft leise mit. Ein Reittier, auf dem jemand sitzt, läuft nie selbst los, auch wenn es ein eigenes Verhalten hat. |
+| **Ascandir - Token HUD Folders** | Die Knöpfe 🚶 und ⏸/▶ haben feste Kennungen und lassen sich in Ordner sortieren. Hattest du sie vor Version 0.9.0 schon einsortiert, sortiere sie einmal neu ein. |
+| **Ascandir - DnD5e Spoils & Skullduggery** | Türen, die dort abgeschlossen sind, benutzen NSCs nie. Wird das Schloss geknackt, gehen sie hindurch. |
+| **Automated Conditions 5e** (oder Zustände von Hand) | *Tot*, *Bewusstlos* oder 0 TP pausieren dauerhaft. *Kampfunfähig*, *Gelähmt*, *Versteinert*, *Betäubt*, *Festgesetzt*, *Gepackt* und *Schlafend* lassen den NSC nur stehen bleiben: Ist der Zustand weg, läuft er von selbst weiter. |
+| **Monk's Active Tile Triggers, Gatherer, Mastercrafted** und andere Regionen/Kacheln | NSC-Schritte zählen wie normale Token-Bewegung und können Kachel-Auslöser und Regionen-Verhalten auslösen. Soll eine Kachel nur auf Spieler reagieren, stell das in der Kachel bzw. Region ein. |
+| **Carousel Combat Tracker** & Kampf allgemein | Startet ein Kampf in der Szene, bleiben alle NSCs stehen (abschaltbar). |
+
 ## Gut zu wissen
 
 - Die NSCs laufen **im Hintergrund**: Ihre Schritte und Türen zeichnen keine offenen Fenster neu. Du kannst also Szene, Token oder Wände bearbeiten, während sie unterwegs sind – nichts flackert oder klappt zu.
